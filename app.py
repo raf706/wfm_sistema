@@ -9,7 +9,7 @@ import os
 # 1. CONFIGURACIÓN DE PÁGINA
 st.set_page_config(page_title="Tareo de Operaciones - Fargoline", page_icon="📦", layout="wide")
 
-# CONEXIÓN A BASE DE DATOS (Debe estar antes del Login para poder leer la clave)
+# CONEXIÓN A BASE DE DATOS
 SUPABASE_URL = "https://vsnyqynjaxdmofyewfcq.supabase.co"
 SUPABASE_KEY = "sb_publishable__wmHvw9dfAcu-o78te3iMg_9JqpAb_P"
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -33,7 +33,6 @@ if not st.session_state.autenticado:
         
         if st.button("Ingresar", type="primary", use_container_width=True):
             try:
-                # Lee las credenciales en vivo desde Supabase
                 res_user = supabase.table("usuarios").select("*").eq("id", 1).execute()
                 if res_user.data:
                     db_usuario = res_user.data[0]['usuario']
@@ -47,9 +46,9 @@ if not st.session_state.autenticado:
                 else:
                     st.error("⚠️ No se encontró la tabla de usuarios en Supabase.")
             except Exception as e:
-                st.error("⚠️ Error de conexión. ¿Ya ejecutaste el código en el SQL Editor de Supabase?")
+                st.error("⚠️ Error de conexión.")
     
-    st.stop() # Detiene la app aquí si no hay acceso
+    st.stop()
 
 # =========================================================================
 # 3. APLICACIÓN PRINCIPAL
@@ -70,7 +69,6 @@ with st.sidebar:
         st.session_state.autenticado = False
         st.rerun()
         
-    # --- NUEVA SECCIÓN: CAMBIAR CONTRASEÑA ---
     with st.expander("🔐 Cambiar Usuario/Contraseña"):
         with st.form("form_cambio_clave"):
             nuevo_user = st.text_input("Nuevo Usuario:")
@@ -81,7 +79,6 @@ with st.sidebar:
                     st.success("✅ ¡Credenciales actualizadas con éxito!")
                 else:
                     st.warning("⚠️ Debes llenar ambos campos.")
-    # ----------------------------------------
     
     st.divider()
     st.header("⚡ Acciones Rápidas")
@@ -327,7 +324,7 @@ with tab2:
     else: st.warning("Primero debes registrar colaboradores y sedes.")
 
 # =========================================================================
-# TAB 3 Y TAB 4 (Incidencias y Gestión de Personal)
+# TAB 3 Y TAB 4 (Incidencias y Gestión de Personal Múltiple)
 # =========================================================================
 with tab3:
     st.subheader("🚨 Registrar Faltas, DM o Permisos (Día a Día)")
@@ -390,14 +387,33 @@ with tab4:
                 if st.form_submit_button("Guardar") and nom:
                     supabase.table("colaboradores").insert({"codigo": cod, "nombre": nom, "posicion": limpiar_posicion(pos), "he_acumuladas": 0, "dias_pendientes_recuperacion": 0, "activo": True}).execute()
                     st.cache_data.clear()
-        with st.expander("🗑️ Dar de Baja"):
+        
+        # --- SECCIÓN MEJORADA: DAR DE BAJA MÚLTIPLE ---
+        with st.expander("🗑️ Dar de Baja (Selección Múltiple)"):
             res_activos = supabase.table("colaboradores").select("id, nombre").eq("activo", True).execute().data
             if res_activos:
                 opts = {c['nombre']: c['id'] for c in res_activos}
-                sel = st.selectbox("Colaborador:", list(opts.keys()))
-                if st.button("🚫 Dar de Baja"):
-                    supabase.table("colaboradores").update({"activo": False}).eq("id", opts[sel]).execute()
-                    st.cache_data.clear()
+                sel_list = st.multiselect("Seleccionar Colaboradores a dar de baja:", list(opts.keys()))
+                if st.button("🚫 Dar de Baja Selección") and sel_list:
+                    ids_baja = [opts[n] for n in sel_list]
+                    supabase.table("colaboradores").update({"activo": False}).in_("id", ids_baja).execute()
+                    st.success(f"✅ ¡{len(ids_baja)} colaborador(es) dados de baja exitosamente!")
+                    st.cache_data.clear(); st.rerun()
+            else: st.info("No hay colaboradores activos.")
+
+        # --- SECCIÓN EXTRA: REACTIVAR PERSONAL ---
+        with st.expander("🔄 Reactivar Personal (Inactivos)"):
+            res_inactivos = supabase.table("colaboradores").select("id, nombre").eq("activo", False).execute().data
+            if res_inactivos:
+                opts_in = {c['nombre']: c['id'] for c in res_inactivos}
+                sel_react = st.multiselect("Seleccionar Colaboradores a reactivar:", list(opts_in.keys()))
+                if st.button("✅ Reactivar Selección") and sel_react:
+                    ids_react = [opts_in[n] for n in sel_react]
+                    supabase.table("colaboradores").update({"activo": True}).in_("id", ids_react).execute()
+                    st.success(f"✅ ¡{len(ids_react)} colaborador(es) reactivados exitosamente!")
+                    st.cache_data.clear(); st.rerun()
+            else: st.info("No hay colaboradores dados de baja.")
+
     with col_der:
         st.subheader("🏢 Sedes")
         with st.expander("➕ Agregar Sede"):
