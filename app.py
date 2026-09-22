@@ -7,7 +7,7 @@ from engine import generar_malla_semanal
 # 1. Configuración de la plataforma web
 st.set_page_config(page_title="Sistema WFM - Control de Tareo", page_icon="⚙️", layout="wide")
 
-# 2. Conexión a Supabase
+# 2. Conexión a Supabase con tus credenciales
 SUPABASE_URL = "https://vsnyqynjaxdmofyewfcq.supabase.co"
 SUPABASE_KEY = "sb_publishable__wmHvw9dfAcu-o78te3iMg_9JqpAb_P"
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -106,9 +106,9 @@ with tab3:
     with col_izq:
         st.subheader("👨‍💼 Gestión de Colaboradores")
         
-        # --- NUEVA OPCIÓN: CARGA MASIVA DESDE EXCEL ---
+        # --- CARGA MASIVA (BLINDADA CONTRA ERRORES DE ENCABEZADO) ---
         with st.expander("📁 Carga Masiva desde Excel / CSV", expanded=True):
-            st.markdown("Subir el archivo Excel con las columnas: **N° pers.**, **Nombre**, **Descripción Posición**")
+            st.markdown("Subir el archivo Excel (.xlsx o .csv) con la lista de colaboradores.")
             archivo_excel = st.file_uploader("Selecciona tu archivo Excel (.xlsx o .csv):", type=["xlsx", "csv"])
             
             if archivo_excel is not None:
@@ -118,26 +118,39 @@ with tab3:
                     else:
                         df_cargado = pd.read_excel(archivo_excel)
                     
+                    # Limpiar espacios en blanco al inicio/final de las columnas
+                    df_cargado.columns = [str(c).strip() for c in df_cargado.columns]
+                    
                     st.write("Vista previa de los datos a importar:")
                     st.dataframe(df_cargado.head(5))
                     
                     if st.button("📥 Importar Lista Completa a la Base de Datos"):
                         nuevos_registros = []
                         for _, row in df_cargado.iterrows():
-                            nuevos_registros.append({
-                                "codigo": str(row["N° pers."]),
-                                "nombre": str(row["Nombre"]),
-                                "posicion": str(row["Descripción Posición"]),
-                                "he_acumuladas": 0.0,
-                                "dias_pendientes_recuperacion": 0,
-                                "activo": True
-                            })
+                            # Lectura directa por posición de columna: Columna 0 = Código, 1 = Nombre, 2 = Posición
+                            val_codigo = str(row.iloc[0]).strip()
+                            val_nombre = str(row.iloc[1]).strip()
+                            val_posicion = str(row.iloc[2]).strip()
+                            
+                            # Ignorar filas totalmente vacías
+                            if val_codigo and val_nombre and val_codigo.lower() != 'nan':
+                                nuevos_registros.append({
+                                    "codigo": val_codigo,
+                                    "nombre": val_nombre,
+                                    "posicion": val_posicion,
+                                    "he_acumuladas": 0.0,
+                                    "dias_pendientes_recuperacion": 0,
+                                    "activo": True
+                                })
                         
-                        supabase.table("colaboradores").insert(nuevos_registros).execute()
-                        st.success(f"✅ ¡Se registraron {len(nuevos_registros)} colaboradores exitosamente!")
-                        st.cache_data.clear()
+                        if nuevos_registros:
+                            supabase.table("colaboradores").insert(nuevos_registros).execute()
+                            st.success(f"✅ ¡Se registraron {len(nuevos_registros)} colaboradores exitosamente!")
+                            st.cache_data.clear()
+                        else:
+                            st.warning("No se encontraron registros válidos para importar.")
                 except Exception as e:
-                    st.error(f"Error al procesar el archivo. Asegúrate de que tenga las columnas exactas: 'N° pers.', 'Nombre', 'Descripción Posición'. Detalle: {e}")
+                    st.error(f"Error al procesar el archivo. Detalle: {e}")
 
         with st.expander("➕ Agregar Manualmente (Uno por Uno)"):
             with st.form("form_nuevo_colab", clear_on_submit=True):
