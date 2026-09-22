@@ -11,15 +11,13 @@ SUPABASE_URL = "https://vsnyqynjaxdmofyewfcq.supabase.co"
 SUPABASE_KEY = "sb_publishable__wmHvw9dfAcu-o78te3iMg_9JqpAb_P"
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# --- CABECERA CON LOGO Y TÍTULO ---
-col_logo, col_title = st.columns([1, 7])
+# --- CABECERA CON LOGO MÁS GRANDE Y ALINEADO ---
+col_logo, col_title = st.columns([2, 8])
 with col_logo:
     try:
-        # Intenta cargar el archivo local 'logo.png' subido a GitHub
-        st.image("logo.png", width=90)
+        st.image("logo.png", width=220)
     except Exception:
-        # Muestra este ícono como respaldo si aún no se sube el archivo logo.png
-        st.title("📦")
+        st.write("")
 
 with col_title:
     st.title("Tareo de Operaciones - Fargoline")
@@ -361,7 +359,7 @@ with tab4:
             except: pass
 
 # =========================================================================
-# TAB 5: HISTÓRICO Y REPORTES (Con Botones de Borrado)
+# TAB 5: HISTÓRICO Y REPORTES
 # =========================================================================
 with tab5:
     st.subheader("🗂️ Consulta de Histórico General")
