@@ -6,22 +6,24 @@ from supabase import create_client, Client
 from engine import generar_malla_semanal, limpiar_posicion, registrar_incidencia_diaria
 import os
 
-# 1. CONFIGURACIÓN DE PÁGINA (Siempre debe ir primero)
+# 1. CONFIGURACIÓN DE PÁGINA
 st.set_page_config(page_title="Tareo de Operaciones - Fargoline", page_icon="📦", layout="wide")
 
+# CONEXIÓN A BASE DE DATOS (Debe estar antes del Login para poder leer la clave)
+SUPABASE_URL = "https://vsnyqynjaxdmofyewfcq.supabase.co"
+SUPABASE_KEY = "sb_publishable__wmHvw9dfAcu-o78te3iMg_9JqpAb_P"
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
 # =========================================================================
-# 2. SISTEMA DE SEGURIDAD (LOGIN)
+# 2. SISTEMA DE SEGURIDAD (LOGIN CONECTADO A BASE DE DATOS)
 # =========================================================================
 if "autenticado" not in st.session_state:
     st.session_state.autenticado = False
 
 if not st.session_state.autenticado:
-    # Diseño de la pantalla de Login centrada
     col1, col2, col3 = st.columns([1, 1, 1])
     with col2:
-        st.write("")
-        st.write("")
-        # Mostrar logo en el Login
+        st.write(""); st.write("")
         if os.path.exists("logo.png.png"): st.image("logo.png.png", width=220)
         elif os.path.exists("logo.png"): st.image("logo.png", width=220)
         
@@ -30,24 +32,28 @@ if not st.session_state.autenticado:
         clave = st.text_input("🔑 Contraseña", type="password")
         
         if st.button("Ingresar", type="primary", use_container_width=True):
-            # AQUI PUEDES CAMBIAR TU USUARIO Y CONTRASEÑA
-            if usuario == "admin" and clave == "fargoline2026":
-                st.session_state.autenticado = True
-                st.rerun()
-            else:
-                st.error("❌ Usuario o contraseña incorrectos")
+            try:
+                # Lee las credenciales en vivo desde Supabase
+                res_user = supabase.table("usuarios").select("*").eq("id", 1).execute()
+                if res_user.data:
+                    db_usuario = res_user.data[0]['usuario']
+                    db_clave = res_user.data[0]['clave']
+                    
+                    if usuario == db_usuario and clave == db_clave:
+                        st.session_state.autenticado = True
+                        st.rerun()
+                    else:
+                        st.error("❌ Usuario o contraseña incorrectos")
+                else:
+                    st.error("⚠️ No se encontró la tabla de usuarios en Supabase.")
+            except Exception as e:
+                st.error("⚠️ Error de conexión. ¿Ya ejecutaste el código en el SQL Editor de Supabase?")
     
-    # Detenemos la ejecución para que no cargue la app si no está logueado
-    st.stop()
+    st.stop() # Detiene la app aquí si no hay acceso
 
 # =========================================================================
-# 3. APLICACIÓN PRINCIPAL (Solo se ejecuta si autenticado == True)
+# 3. APLICACIÓN PRINCIPAL
 # =========================================================================
-SUPABASE_URL = "https://vsnyqynjaxdmofyewfcq.supabase.co"
-SUPABASE_KEY = "sb_publishable__wmHvw9dfAcu-o78te3iMg_9JqpAb_P"
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-# --- CABECERA CON LOGO Y TÍTULO ---
 col_logo, col_title = st.columns([2, 8])
 with col_logo:
     if os.path.exists("logo.png.png"): st.image("logo.png.png", width=220)
@@ -60,13 +66,24 @@ with col_title:
 dias_nombres = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
 
 with st.sidebar:
-    # Botón para cerrar sesión
     if st.button("🚪 Cerrar Sesión", use_container_width=True):
         st.session_state.autenticado = False
         st.rerun()
+        
+    # --- NUEVA SECCIÓN: CAMBIAR CONTRASEÑA ---
+    with st.expander("🔐 Cambiar Usuario/Contraseña"):
+        with st.form("form_cambio_clave"):
+            nuevo_user = st.text_input("Nuevo Usuario:")
+            nueva_clave = st.text_input("Nueva Contraseña:", type="password")
+            if st.form_submit_button("Guardar Nuevos Datos"):
+                if nuevo_user and nueva_clave:
+                    supabase.table("usuarios").update({"usuario": nuevo_user.strip(), "clave": nueva_clave.strip()}).eq("id", 1).execute()
+                    st.success("✅ ¡Credenciales actualizadas con éxito!")
+                else:
+                    st.warning("⚠️ Debes llenar ambos campos.")
+    # ----------------------------------------
     
     st.divider()
-    
     st.header("⚡ Acciones Rápidas")
     fecha_seleccionada = st.date_input("Inicio de malla (Lunes recomendado):", date.today())
     num_semanas = st.selectbox("Semanas a programar / visualizar:", [1, 2, 3, 4], index=0)
@@ -401,7 +418,7 @@ with tab4:
             except: pass
 
 # =========================================================================
-# TAB 5: HISTÓRICO Y REPORTES (Con Botones de Borrado)
+# TAB 5: HISTÓRICO Y REPORTES
 # =========================================================================
 with tab5:
     st.subheader("🗂️ Consulta de Histórico General")
