@@ -324,7 +324,7 @@ with tab2:
     else: st.warning("Primero debes registrar colaboradores y sedes.")
 
 # =========================================================================
-# TAB 3 Y TAB 4 (Incidencias y Gestión de Personal Múltiple)
+# TAB 3 Y TAB 4 (Incidencias y Gestión de Personal)
 # =========================================================================
 with tab3:
     st.subheader("🚨 Registrar Faltas, DM o Permisos (Día a Día)")
@@ -366,6 +366,8 @@ with tab4:
     col_izq, col_der = st.columns(2)
     with col_izq:
         st.subheader("👨‍💼 Colaboradores")
+        
+        # 1. CARGA MASIVA CON RESOLUCIÓN DE CONFLICTOS (on_conflict="codigo")
         with st.expander("📁 Carga Masiva (Excel/CSV)"):
             archivo = st.file_uploader("Selecciona archivo:", type=["xlsx", "csv"])
             if archivo and st.button("📥 Importar Lista"):
@@ -387,36 +389,42 @@ with tab4:
                             "activo": True
                         })
                     if regs:
-                        # USAMOS UPSERT EN LUGAR DE INSERT PARA EVITAR COLAPSOS POR DUPLICADOS
-                        supabase.table("colaboradores").upsert(regs).execute()
-                        st.success(f"✅ ¡{len(regs)} colaborador(es) procesados/actualizados correctamente!")
+                        # Resuelve conflictos por código de empleado
+                        supabase.table("colaboradores").upsert(regs, on_conflict="codigo").execute()
+                        st.success(f"✅ ¡{len(regs)} colaborador(es) cargados/actualizados correctamente!")
                         st.cache_data.clear()
                         st.rerun()
                 except Exception as e:
-                    st.error(f"⚠️ Error al procesar el archivo. Revisa que el formato del Excel sea correcto. Detalle: {e}")
+                    st.error(f"⚠️ Error al procesar el archivo: {e}")
 
+        # 2. AGREGAR MANUAL
         with st.expander("➕ Agregar Manual"):
             with st.form("f_emp", clear_on_submit=True):
                 cod, nom, pos = st.text_input("Código:"), st.text_input("Nombre:"), st.text_input("Posición:")
                 if st.form_submit_button("Guardar") and nom:
                     try:
-                        supabase.table("colaboradores").upsert({"codigo": cod, "nombre": nom, "posicion": limpiar_posicion(pos), "he_acumuladas": 0, "dias_pendientes_recuperacion": 0, "activo": True}).execute()
+                        supabase.table("colaboradores").upsert(
+                            {"codigo": cod, "nombre": nom, "posicion": limpiar_posicion(pos), "he_acumuladas": 0, "dias_pendientes_recuperacion": 0, "activo": True},
+                            on_conflict="codigo"
+                        ).execute()
                         st.success("✅ Guardado correctamente."); st.cache_data.clear(); st.rerun()
                     except Exception as e:
                         st.error(f"⚠️ Error al guardar: {e}")
         
-        with st.expander("🗑️ Dar de Baja (Selección Múltiple)"):
+        # 3. DAR DE BAJA (DESACTIVAR)
+        with st.expander("🗑️ Dar de Baja (Desactivar Personal)"):
             res_activos = supabase.table("colaboradores").select("id, nombre").eq("activo", True).execute().data
             if res_activos:
                 opts = {c['nombre']: c['id'] for c in res_activos}
-                sel_list = st.multiselect("Seleccionar Colaboradores a dar de baja:", list(opts.keys()))
-                if st.button("🚫 Dar de Baja Selección") and sel_list:
+                sel_list = st.multiselect("Seleccionar Colaboradores a desactivar:", list(opts.keys()))
+                if st.button("🚫 Desactivar Selección") and sel_list:
                     ids_baja = [opts[n] for n in sel_list]
                     supabase.table("colaboradores").update({"activo": False}).in_("id", ids_baja).execute()
-                    st.success(f"✅ ¡{len(ids_baja)} colaborador(es) dados de baja exitosamente!")
+                    st.success(f"✅ ¡{len(ids_baja)} colaborador(es) desactivado(s)!")
                     st.cache_data.clear(); st.rerun()
             else: st.info("No hay colaboradores activos.")
 
+        # 4. REACTIVAR PERSONAL
         with st.expander("🔄 Reactivar Personal (Inactivos)"):
             res_inactivos = supabase.table("colaboradores").select("id, nombre").eq("activo", False).execute().data
             if res_inactivos:
@@ -425,9 +433,47 @@ with tab4:
                 if st.button("✅ Reactivar Selección") and sel_react:
                     ids_react = [opts_in[n] for n in sel_react]
                     supabase.table("colaboradores").update({"activo": True}).in_("id", ids_react).execute()
-                    st.success(f"✅ ¡{len(ids_react)} colaborador(es) reactivados exitosamente!")
+                    st.success(f"✅ ¡{len(ids_react)} colaborador(es) reactivados!")
                     st.cache_data.clear(); st.rerun()
             else: st.info("No hay colaboradores dados de baja.")
+
+        # 5. NUEVO: ELIMINAR DEFINITIVAMENTE (BORRADO FISICO DE LA BASE DE DATOS)
+        with st.expander("🔥 Eliminar Definitivamente (Borrado Permanente)"):
+            st.caption("⚠️ Esta opción borra al colaborador de forma IRREVERSIBLE de la base de datos.")
+            res_todos = supabase.table("colaboradores").select("id, nombre, codigo, activo").execute().data
+            if res_todos:
+                opts_del = {f"{c['nombre']} (Cód: {c['codigo']}) {'[Inactivo]' if not c['activo'] else ''}": c['id'] for c in res_todos}
+                sel_perm_del = st.multiselect("Seleccionar para ELIMINAR PERMANENTEMENTE:", list(opts_del.keys()))
+                
+                c_del1, c_del2 = st.columns([1, 1])
+                with c_del1:
+                    confirm_perm = st.checkbox("Confirmo borrar seleccionados")
+                    if st.button("💥 Eliminar Seleccionados", type="primary") and sel_perm_del:
+                        if confirm_perm:
+                            ids_perm = [opts_del[n] for n in sel_perm_del]
+                            # Limpia tablas relacionadas para evitar violaciones de clave foránea
+                            supabase.table("tareo_programado").delete().in_("colaborador_id", ids_perm).execute()
+                            supabase.table("restricciones_fechas").delete().in_("colaborador_id", ids_perm).execute()
+                            # Borra del maestro de colaboradores
+                            supabase.table("colaboradores").delete().in_("id", ids_perm).execute()
+                            st.success(f"🔥 ¡{len(ids_perm)} colaborador(es) eliminados permanentemente!")
+                            st.cache_data.clear(); st.rerun()
+                        else:
+                            st.warning("⚠️ Debes marcar la casilla de confirmación.")
+                            
+                with c_del2:
+                    confirm_all = st.checkbox("Confirmo VACIAR TODO el personal")
+                    if st.button("🚨 Eliminar TODOS los Colaboradores"):
+                        if confirm_all:
+                            supabase.table("tareo_programado").delete().neq("id", 0).execute()
+                            supabase.table("restricciones_fechas").delete().neq("id", 0).execute()
+                            supabase.table("colaboradores").delete().neq("id", 0).execute()
+                            st.success("🔥 ¡Se ha limpiado por completo la tabla de colaboradores!")
+                            st.cache_data.clear(); st.rerun()
+                        else:
+                            st.warning("⚠️ Debes marcar la casilla de confirmación.")
+            else:
+                st.info("No hay colaboradores registrados.")
 
     with col_der:
         st.subheader("🏢 Sedes")
