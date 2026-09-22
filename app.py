@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import plotly.express as px
 from datetime import date, timedelta
 from supabase import create_client, Client
 from engine import generar_malla_semanal, limpiar_posicion, registrar_incidencia_diaria
@@ -49,7 +50,6 @@ with tab1:
             turno_base = "D" if row['turno'] == "Día" else "N"
             estado = row.get('estado')
             
-            # Aseguramos que la falta se pinte en la matriz
             if estado in ['FALTA', 'DM', 'PERMISO']:
                 codigo_turno = f"❌ {estado}"
             else:
@@ -141,6 +141,7 @@ with tab1:
                     "Déficit Real": deficit_semanal if deficit_semanal > 0 else 0, "Estado": estado
                 })
 
+            # --- MÉTRICAS KPI ---
             kpi1, kpi2, kpi3, kpi4 = st.columns(4)
             kpi1.metric("Turnos Requeridos", total_req_sem)
             kpi2.metric("Turnos Normales", total_prog_sem - total_hhee)
@@ -148,8 +149,47 @@ with tab1:
             deficit_total = total_req_sem - total_prog_sem
             kpi4.metric("Déficit Faltante", f"{deficit_total}", delta=-deficit_total if deficit_total > 0 else 0, delta_color="inverse")
 
-            st.dataframe(pd.DataFrame(reporte_filas), use_container_width=True)
-    except Exception:
+            # --- TABLA EJECUTIVA ---
+            df_reporte = pd.DataFrame(reporte_filas)
+            st.dataframe(df_reporte, use_container_width=True)
+
+            # =========================================================
+            # NUEVO: GRÁFICOS INTERACTIVOS (COBERTURA Y HHEE POR SEDE)
+            # =========================================================
+            if not df_reporte.empty:
+                st.divider()
+                st.subheader("📈 Análisis Gráfico de Cobertura y Presupuesto por Sede")
+                
+                # Agrupar los datos de la tabla por 'Sede'
+                df_sede = df_reporte.groupby('Sede', as_index=False)[['Req. Semana', 'Prog. Real', 'HHEE (Extras)', 'Déficit Real']].sum()
+                # Calcular Turnos Normales = Total Programado - Horas Extras
+                df_sede['Turnos Normales'] = df_sede['Prog. Real'] - df_sede['HHEE (Extras)']
+
+                col_graf1, col_graf2 = st.columns(2)
+
+                with col_graf1:
+                    # Gráfico 1: Turnos Programados vs Déficit Faltante
+                    df_g1 = df_sede[['Sede', 'Prog. Real', 'Déficit Real']].melt(id_vars='Sede', var_name='Indicador', value_name='Turnos')
+                    fig1 = px.bar(df_g1, x='Sede', y='Turnos', color='Indicador', 
+                                  title='Nivel de Cobertura vs Déficit',
+                                  color_discrete_map={'Prog. Real': '#198754', 'Déficit Real': '#dc3545'}, 
+                                  text_auto=True)
+                    fig1.update_layout(barmode='stack')
+                    st.plotly_chart(fig1, use_container_width=True)
+
+                with col_graf2:
+                    # Gráfico 2: Composición del Costo (Turnos Normales vs Horas Extras)
+                    df_g2 = df_sede[['Sede', 'Turnos Normales', 'HHEE (Extras)']].melt(id_vars='Sede', var_name='Tipo de Turno', value_name='Cantidad')
+                    fig2 = px.bar(df_g2, x='Sede', y='Cantidad', color='Tipo de Turno', 
+                                  title='Composición Operativa: Normales vs HHEE',
+                                  color_discrete_map={'Turnos Normales': '#0d6efd', 'HHEE (Extras)': '#ffc107'}, 
+                                  text_auto=True)
+                    fig2.update_layout(barmode='stack')
+                    st.plotly_chart(fig2, use_container_width=True)
+
+        else:
+            st.info("Configura los requerimientos en la pestaña **'🏢 Requerimiento por Sede'**.")
+    except Exception as e:
         pass
 
 # --- TAB 2 ---
@@ -213,10 +253,8 @@ with tab3:
             
             if st.form_submit_button("Registrar Ausencia e Iniciar Reemplazo"):
                 id_c = opciones_hoy[colab_sel]
-                # Forzamos la actualización directa aquí para mayor seguridad
                 turnos_update = supabase.table("tareo_programado").select("id").eq("fecha", str(fecha_incidencia)).eq("colaborador_id", id_c).execute().data
                 if turnos_update:
-                    # Limpiamos caché antes y después
                     st.cache_data.clear()
                     success, msg = registrar_incidencia_diaria(fecha_incidencia, id_c, motivo, reemplazar)
                     if success:
