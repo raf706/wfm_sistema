@@ -6,10 +6,7 @@ SUPABASE_KEY = "sb_publishable__wmHvw9dfAcu-o78te3iMg_9JqpAb_P"
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# ==============================================================================
-# REGLA TEMPORAL DE EQUIVALENCIAS DE POSICIÓN
-# Cuando quieras separarlos, simplemente deja este diccionario vacío: EQUIVALENCIAS_POSICION = {}
-# ==============================================================================
+# Regla temporal de equivalencia
 EQUIVALENCIAS_POSICION = {
     "Controlador de Patio": "Controlador de Exportaciones",
     "Controlador De Patio": "Controlador de Exportaciones",
@@ -32,35 +29,42 @@ class CalculadorEquidad:
 
 def generar_malla_semanal(fecha_inicio: date):
     print(f"\n==================================================")
-    print(f" GENERANDO TAREO 4x3 ADAPTATIVO CON REGLA TEMPORAL")
+    print(f" GENERANDO TAREO CON DEMANDA CONFIGURABLE POR SEDE")
     print(f"==================================================\n")
 
     # 1. Limpiar malla anterior
     supabase.table("tareo_programado").delete().neq("id", 0).execute()
 
-    # 2. Traer colaboradores, restricciones y sedes activas
+    # 2. Traer colaboradores y restricciones
     colaboradores = supabase.table("colaboradores").select("*").eq("activo", True).execute().data
     restricciones = supabase.table("restricciones_fechas").select("*").execute().data
-    
-    try:
-        res_sedes = supabase.table("sedes").select("nombre").eq("activa", True).execute().data
-        sedes_list = [s['nombre'] for s in res_sedes] if res_sedes else ["Sede Principal"]
-    except Exception:
-        sedes_list = ["Sede Principal"]
 
     if not colaboradores:
         print("No hay colaboradores activos.")
         return
 
-    # 3. Detectar posiciones agrupando por equivalencia temporal
-    posiciones_existentes = list(set(normalizar_posicion(c['posicion']) for c in colaboradores if c.get('posicion')))
+    # 3. Leer la demanda de personal configurada por el usuario
+    try:
+        res_demanda = supabase.table("demanda_operativa").select("*").execute().data
+    except Exception:
+        res_demanda = []
 
-    # 4. Generar demanda de turnos para cada grupo de posición
     demanda_diaria = []
-    for i, pos in enumerate(posiciones_existentes):
-        sede_asignada = sedes_list[i % len(sedes_list)]
-        demanda_diaria.append({"sede": sede_asignada, "posicion": pos, "turno": "Día"})
-        demanda_diaria.append({"sede": sede_asignada, "posicion": pos, "turno": "Noche"})
+    if res_demanda:
+        for item in res_demanda:
+            pos_norm = normalizar_posicion(item['posicion'])
+            for _ in range(item.get('cantidad', 1)):
+                demanda_diaria.append({
+                    "sede": item['sede'],
+                    "posicion": pos_norm,
+                    "turno": item['turno']
+                })
+    else:
+        # Fallback de seguridad si aún no se ha configurado la demanda
+        posiciones_existentes = list(set(normalizar_posicion(c['posicion']) for c in colaboradores if c.get('posicion')))
+        for pos in posiciones_existentes:
+            demanda_diaria.append({"sede": "Sede 1", "posicion": pos, "turno": "Día"})
+            demanda_diaria.append({"sede": "Sede 1", "posicion": pos, "turno": "Noche"})
 
     historial_semana = {c['id']: [] for c in colaboradores}
     dias = [fecha_inicio + timedelta(days=i) for i in range(7)]
@@ -71,7 +75,7 @@ def generar_malla_semanal(fecha_inicio: date):
             candidatos_validos = []
             
             for emp in colaboradores:
-                # A. Filtro de Posición usando la regla de equivalencia temporal
+                # A. Filtro de Posición exacta (o equivalente)
                 if normalizar_posicion(emp['posicion']) != slot['posicion']: continue
                 
                 # B. Filtro de Vacaciones o DM
