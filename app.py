@@ -369,26 +369,42 @@ with tab4:
         with st.expander("📁 Carga Masiva (Excel/CSV)"):
             archivo = st.file_uploader("Selecciona archivo:", type=["xlsx", "csv"])
             if archivo and st.button("📥 Importar Lista"):
-                df = pd.read_csv(archivo) if archivo.name.endswith('.csv') else pd.read_excel(archivo)
-                df.columns = [str(c).strip() for c in df.columns]
-                regs = []
-                for _, row in df.iterrows():
-                    if pd.isna(row.iloc[0]) or pd.isna(row.iloc[1]): continue
-                    try: cod = str(int(float(row.iloc[0])))
-                    except: cod = str(row.iloc[0]).strip()
-                    pos = limpiar_posicion(str(row.iloc[2])) if not pd.isna(row.iloc[2]) else "General"
-                    regs.append({"codigo": cod, "nombre": str(row.iloc[1]).strip(), "posicion": pos, "he_acumuladas": 0.0, "dias_pendientes_recuperacion": 0, "activo": True})
-                if regs:
-                    supabase.table("colaboradores").insert(regs).execute()
-                    st.success(f"¡{len(regs)} registrados!"); st.cache_data.clear()
+                try:
+                    df = pd.read_csv(archivo) if archivo.name.endswith('.csv') else pd.read_excel(archivo)
+                    df.columns = [str(c).strip() for c in df.columns]
+                    regs = []
+                    for _, row in df.iterrows():
+                        if pd.isna(row.iloc[0]) or pd.isna(row.iloc[1]): continue
+                        try: cod = str(int(float(row.iloc[0])))
+                        except: cod = str(row.iloc[0]).strip()
+                        pos = limpiar_posicion(str(row.iloc[2])) if not pd.isna(row.iloc[2]) else "General"
+                        regs.append({
+                            "codigo": cod, 
+                            "nombre": str(row.iloc[1]).strip(), 
+                            "posicion": pos, 
+                            "he_acumuladas": 0.0, 
+                            "dias_pendientes_recuperacion": 0, 
+                            "activo": True
+                        })
+                    if regs:
+                        # USAMOS UPSERT EN LUGAR DE INSERT PARA EVITAR COLAPSOS POR DUPLICADOS
+                        supabase.table("colaboradores").upsert(regs).execute()
+                        st.success(f"✅ ¡{len(regs)} colaborador(es) procesados/actualizados correctamente!")
+                        st.cache_data.clear()
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"⚠️ Error al procesar el archivo. Revisa que el formato del Excel sea correcto. Detalle: {e}")
+
         with st.expander("➕ Agregar Manual"):
             with st.form("f_emp", clear_on_submit=True):
                 cod, nom, pos = st.text_input("Código:"), st.text_input("Nombre:"), st.text_input("Posición:")
                 if st.form_submit_button("Guardar") and nom:
-                    supabase.table("colaboradores").insert({"codigo": cod, "nombre": nom, "posicion": limpiar_posicion(pos), "he_acumuladas": 0, "dias_pendientes_recuperacion": 0, "activo": True}).execute()
-                    st.cache_data.clear()
+                    try:
+                        supabase.table("colaboradores").upsert({"codigo": cod, "nombre": nom, "posicion": limpiar_posicion(pos), "he_acumuladas": 0, "dias_pendientes_recuperacion": 0, "activo": True}).execute()
+                        st.success("✅ Guardado correctamente."); st.cache_data.clear(); st.rerun()
+                    except Exception as e:
+                        st.error(f"⚠️ Error al guardar: {e}")
         
-        # --- SECCIÓN MEJORADA: DAR DE BAJA MÚLTIPLE ---
         with st.expander("🗑️ Dar de Baja (Selección Múltiple)"):
             res_activos = supabase.table("colaboradores").select("id, nombre").eq("activo", True).execute().data
             if res_activos:
@@ -401,7 +417,6 @@ with tab4:
                     st.cache_data.clear(); st.rerun()
             else: st.info("No hay colaboradores activos.")
 
-        # --- SECCIÓN EXTRA: REACTIVAR PERSONAL ---
         with st.expander("🔄 Reactivar Personal (Inactivos)"):
             res_inactivos = supabase.table("colaboradores").select("id, nombre").eq("activo", False).execute().data
             if res_inactivos:
