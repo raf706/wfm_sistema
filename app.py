@@ -17,7 +17,6 @@ with st.sidebar:
     st.header("⚡ Acciones Rápidas")
     fecha_seleccionada = st.date_input("Inicio de malla (Lunes recomendado):", date.today())
     
-    # NUEVO: Selector de cantidad de semanas a programar / visualizar
     num_semanas = st.selectbox("Semanas a programar / visualizar:", [1, 2, 3, 4], index=0)
     
     st.info("💡 La malla no borra tu historial. Solo sobrescribe las fechas seleccionadas.")
@@ -29,10 +28,10 @@ with st.sidebar:
             st.cache_data.clear()
 
 tab1, tab2, tab3, tab4 = st.tabs([
-    "📅 Matriz y Reporte Ejecutivo", 
-    "🏢 Requerimiento por Sede",
+    "📅 Matriz y Reporte", 
+    "🏢 Demanda Operativa Rápida",
     "🚨 Incidencias y Reemplazos", 
-    "👥 Gestión de Personal y Sedes"
+    "👥 Personal y Sedes"
 ])
 
 # --- TAB 1: MATRIZ Y REPORTE EJECUTIVO ---
@@ -124,8 +123,6 @@ with tab1:
 
             for _, r in df_dem.iterrows():
                 s, pos, t, req_diario = r['sede'], limpiar_posicion(r['posicion']), r['turno'], r['cantidad']
-                
-                # Multiplicamos la demanda por el número de semanas para comparar correcto
                 req_periodo = req_diario * 7 * num_semanas 
                 
                 prog_semanal = conteo_prog.get((s, pos, t), 0)
@@ -177,41 +174,82 @@ with tab1:
 
     except Exception as e: pass
 
-# --- TAB 2, TAB 3, TAB 4 ---
+# --- TAB 2: EDICIÓN RÁPIDA DE DEMANDA (ESTILO EXCEL) ---
 with tab2:
-    st.subheader("🏢 Definir Cuántos Trabajadores Requiere Cada Sede")
+    st.subheader("🏢 Definir Demanda Operativa (Matriz Inteligente)")
+    st.markdown("Edita los requerimientos directamente haciendo doble clic en los números (como si fuera Excel). Las columnas **Sede** y **Posición** están bloqueadas por seguridad. Presiona **Guardar Matriz** cuando termines.")
+
     try: res_sedes = supabase.table("sedes").select("nombre").eq("activa", True).execute().data
     except Exception: res_sedes = []
-    sedes_opt = [s['nombre'] for s in res_sedes] if res_sedes else ["Sede 1"]
+    sedes_opt = [s['nombre'] for s in res_sedes] if res_sedes else []
 
     res_colabs = supabase.table("colaboradores").select("posicion").eq("activo", True).execute().data
     posiciones_opt = sorted(list(set(limpiar_posicion(c['posicion']) for c in res_colabs if c.get('posicion')))) if res_colabs else []
 
-    if posiciones_opt:
-        c1, c2, c3, c4 = st.columns(4)
-        sede_sel = c1.selectbox("Seleccionar Sede:", sedes_opt)
-        pos_sel = c2.selectbox("Cargo / Posición:", posiciones_opt)
-        turno_sel = c3.selectbox("Turno:", ["Día", "Noche"])
-        cant_sel = c4.number_input("Personal Requerido:", min_value=0, max_value=20, value=1)
-
-        if st.button("💾 Guardar Requerimiento"):
-            supabase.table("demanda_operativa").upsert({"sede": sede_sel, "posicion": pos_sel, "turno": turno_sel, "cantidad": cant_sel}, on_conflict="sede,posicion,turno").execute()
-            st.success("Guardado.")
-            st.cache_data.clear()
-
+    if posiciones_opt and sedes_opt:
+        # Traer demanda actual para rellenar la matriz
+        try: res_demanda = supabase.table("demanda_operativa").select("*").execute().data
+        except Exception: res_demanda = []
+        
+        demanda_dict = {}
+        if res_demanda:
+            for d in res_demanda:
+                demanda_dict[(d['sede'], d['posicion'], d['turno'])] = d['cantidad']
+        
+        # Construir las filas de la matriz cruzando Sedes x Posiciones
+        filas_editor = []
+        for s in sedes_opt:
+            for p in posiciones_opt:
+                filas_editor.append({
+                    "Sede": s,
+                    "Posición": p,
+                    "Requerimiento DÍA": demanda_dict.get((s, p, "Día"), 0),
+                    "Requerimiento NOCHE": demanda_dict.get((s, p, "Noche"), 0)
+                })
+                
+        df_editor = pd.DataFrame(filas_editor)
+        
+        # Mostramos la tabla editable
+        edited_df = st.data_editor(
+            df_editor, 
+            use_container_width=True,
+            hide_index=True,
+            disabled=["Sede", "Posición"] # El usuario solo puede editar los números
+        )
+        
         st.divider()
-        col_tit, col_btn = st.columns([3, 1])
-        with col_tit: st.subheader("📋 Cobertura Actual Configurada")
-        with col_btn:
-            if st.button("🗑️ Vaciar Demanda"):
+        c_btn1, c_btn2 = st.columns([2, 8])
+        with c_btn1:
+            if st.button("💾 Guardar Matriz", type="primary"):
+                nuevos_registros = []
+                for _, row in edited_df.iterrows():
+                    s = row["Sede"]
+                    p = row["Posición"]
+                    c_dia = int(row["Requerimiento DÍA"])
+                    c_noche = int(row["Requerimiento NOCHE"])
+                    
+                    if c_dia > 0: nuevos_registros.append({"sede": s, "posicion": p, "turno": "Día", "cantidad": c_dia})
+                    if c_noche > 0: nuevos_registros.append({"sede": s, "posicion": p, "turno": "Noche", "cantidad": c_noche})
+                        
+                # Borramos la demanda antigua e insertamos la nueva de un solo golpe
                 supabase.table("demanda_operativa").delete().neq("id", 0).execute()
-                st.cache_data.clear(); st.rerun()
+                if nuevos_registros:
+                    supabase.table("demanda_operativa").insert(nuevos_registros).execute()
+                
+                st.success("✅ ¡Matriz guardada exitosamente!")
+                st.cache_data.clear()
+                st.rerun()
+                
+        with c_btn2:
+            if st.button("🗑️ Vaciar Todo (Poner en Ceros)"):
+                supabase.table("demanda_operativa").delete().neq("id", 0).execute()
+                st.warning("⚠️ Todos los requerimientos se han borrado.")
+                st.cache_data.clear()
+                st.rerun()
+    else:
+        st.warning("Primero debes registrar colaboradores y sedes en la pestaña de Gestión.")
 
-        try:
-            res_demanda = supabase.table("demanda_operativa").select("*").execute().data
-            if res_demanda: st.dataframe(pd.DataFrame(res_demanda)[["sede", "posicion", "turno", "cantidad"]], use_container_width=True)
-        except: pass
-
+# --- TAB 3: GESTIÓN DE INCIDENCIAS DIARIAS Y REEMPLAZOS ---
 with tab3:
     st.subheader("🚨 Registrar Faltas, DM o Permisos (Día a Día)")
     c_fecha, c_resto = st.columns([1, 2])
@@ -251,6 +289,7 @@ with tab3:
             supabase.table("restricciones_fechas").insert({"colaborador_id": opc_colab[colab_vaca], "fecha_inicio": str(f_ini), "fecha_fin": str(f_fin), "tipo": "VACACIONES"}).execute()
             st.success("Vacaciones guardadas."); st.cache_data.clear()
 
+# --- TAB 4 ---
 with tab4:
     col_izq, col_der = st.columns(2)
     with col_izq:
