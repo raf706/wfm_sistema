@@ -12,18 +12,16 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 st.title("⚙️ Sistema WFM - Panel de Administración")
 
-# --- BARRA LATERAL ---
 with st.sidebar:
     st.header("⚡ Acciones Rápidas")
     fecha_seleccionada = st.date_input("Inicio de semana a programar:", date.today())
     
     if st.button("🚀 Recalcular Malla Semanal", type="primary"):
-        with st.spinner("Ejecutando motor de equidad 4x3 y restricciones..."):
+        with st.spinner("Generando matriz con HHEE y descansos intercalados..."):
             generar_malla_semanal(fecha_seleccionada)
             st.success("¡Malla actualizada correctamente!")
             st.cache_data.clear()
 
-# --- PESTAÑAS PRINCIPALES ---
 tab1, tab2, tab3, tab4 = st.tabs([
     "📅 Matriz y Reporte Ejecutivo", 
     "🏢 Requerimiento por Sede",
@@ -31,30 +29,30 @@ tab1, tab2, tab3, tab4 = st.tabs([
     "👥 Gestión de Personal y Sedes"
 ])
 
-# --- TAB 1: MATRIZ DE TAREO Y REPORTE DE DÉFICIT PARA JEFATURA ---
+# --- TAB 1: MATRIZ DE TAREO ---
 with tab1:
     dias_semana = [str(fecha_seleccionada + timedelta(days=i)) for i in range(7)]
 
     @st.cache_data(ttl=5)
     def cargar_matriz_tareo(f_inicio_str, f_fin_str, lista_dias):
         res = supabase.table("tareo_programado")\
-            .select("fecha, turno, sede, colaboradores(nombre, posicion)")\
+            .select("fecha, turno, sede, es_hhee, colaboradores(nombre, posicion)")\
             .gte("fecha", f_inicio_str)\
             .lte("fecha", f_fin_str)\
             .execute()
         
-        if not res.data:
-            return pd.DataFrame()
+        if not res.data: return pd.DataFrame()
 
         filas = []
         for row in res.data:
             nombre_sede = row.get('sede', 'Sede 1')
-            if row['turno'] == "Día":
-                codigo_turno = f"D ({nombre_sede})"
-            elif row['turno'] == "Noche":
-                codigo_turno = f"N ({nombre_sede})"
+            turno_base = "D" if row['turno'] == "Día" else "N"
+            
+            # Etiqueta visual para las Horas Extras
+            if row.get('es_hhee'):
+                codigo_turno = f"{turno_base} ({nombre_sede}) [HE]"
             else:
-                codigo_turno = "L"
+                codigo_turno = f"{turno_base} ({nombre_sede})"
 
             filas.append({
                 "Colaborador": row['colaboradores']['nombre'],
@@ -64,14 +62,7 @@ with tab1:
             })
         
         df = pd.DataFrame(filas)
-        matriz = df.pivot_table(
-            index=["Colaborador", "Posición"], 
-            columns="Fecha", 
-            values="Turno", 
-            aggfunc="first"
-        ).fillna("L")
-        
-        # Forzar a que la matriz contenga siempre los 7 días
+        matriz = df.pivot_table(index=["Colaborador", "Posición"], columns="Fecha", values="Turno", aggfunc="first").fillna("L")
         matriz = matriz.reindex(columns=lista_dias, fill_value="L")
         return matriz
 
@@ -79,7 +70,7 @@ with tab1:
     f_fin_s = str(fecha_seleccionada + timedelta(days=6))
     matriz_df = cargar_matriz_tareo(f_ini_s, f_fin_s, dias_semana)
 
-    st.subheader("📊 Cuadrante Semanal (7 Días Completos)")
+    st.subheader("📊 Cuadrante Semanal (Los turnos extra se marcan con [HE])")
     if matriz_df.empty:
         st.info("Haz clic en **'🚀 Recalcular Malla Semanal'** para generar el cuadrante.")
     else:
@@ -89,21 +80,17 @@ with tab1:
 
     st.divider()
 
-    # --- DASHBOARD EJECUTIVO DE FALTANTES Y DÉFICIT ---
-    st.subheader("👔 Reporte Ejecutivo para Jefatura: Cobertura y Faltantes por Sede")
-    st.markdown("Comparativa automática entre el **Personal Requerido vs. Programado Real**.")
-
+    st.subheader("👔 Reporte Ejecutivo para Jefatura")
     try:
         res_dem = supabase.table("demanda_operativa").select("*").execute().data
         res_prog = supabase.table("tareo_programado")\
-            .select("sede, turno, colaboradores(posicion)")\
-            .gte("fecha", f_ini_s)\
-            .lte("fecha", f_fin_s)\
-            .execute().data
+            .select("sede, turno, es_hhee, colaboradores(posicion)")\
+            .gte("fecha", f_ini_s).lte("fecha", f_fin_s).execute().data
 
         if res_dem:
             df_dem = pd.DataFrame(res_dem)
             conteo_prog = {}
+            total_hhee = 0
             if res_prog:
                 for p in res_prog:
                     s = p['sede']
@@ -111,65 +98,49 @@ with tab1:
                     pos = limpiar_posicion(p['colaboradores']['posicion'])
                     key = (s, pos, t)
                     conteo_prog[key] = conteo_prog.get(key, 0) + 1
+                    if p.get('es_hhee'): total_hhee += 1
 
             reporte_filas = []
-            total_req_sem = 0
-            total_prog_sem = 0
+            total_req_sem, total_prog_sem = 0, 0
 
             for _, r in df_dem.iterrows():
-                s = r['sede']
-                pos = limpiar_posicion(r['posicion'])
-                t = r['turno']
-                req_diario = r['cantidad']
+                s, pos, t, req_diario = r['sede'], limpiar_posicion(r['posicion']), r['turno'], r['cantidad']
                 req_semanal = req_diario * 7
-                
                 prog_semanal = conteo_prog.get((s, pos, t), 0)
                 deficit_semanal = req_semanal - prog_semanal
 
                 total_req_sem += req_semanal
                 total_prog_sem += prog_semanal
 
-                if deficit_semanal > 0:
-                    estado = f"⚠️ Faltan {deficit_semanal} turnos en la semana"
-                elif deficit_semanal == 0:
-                    estado = "✅ Cobertura 100%"
-                else:
-                    estado = "🔵 Sobre-cubierto"
+                estado = f"⚠️ Faltan {deficit_semanal}" if deficit_semanal > 0 else ("✅ Ok" if deficit_semanal == 0 else "🔵 Exceso")
 
                 reporte_filas.append({
-                    "Sede": s,
-                    "Cargo / Posición": pos,
-                    "Turno": t,
-                    "Requerido (Diario)": req_diario,
-                    "Requerido (Semana)": req_semanal,
-                    "Programado (Semana)": prog_semanal,
-                    "Déficit / Faltante": deficit_semanal if deficit_semanal > 0 else 0,
-                    "Estado Cobertura": estado
+                    "Sede": s, "Cargo": pos, "Turno": t,
+                    "Req. Diario": req_diario, "Req. Semana": req_semanal,
+                    "Prog. Real": prog_semanal, "Déficit Real": deficit_semanal if deficit_semanal > 0 else 0,
+                    "Estado": estado
                 })
 
-            kpi1, kpi2, kpi3 = st.columns(3)
-            kpi1.metric("Turnos Requeridos (Semana)", total_req_sem)
-            kpi2.metric("Turnos Coberturados (Real)", total_prog_sem)
+            kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+            kpi1.metric("Turnos Requeridos", total_req_sem)
+            kpi2.metric("Turnos Normales", total_prog_sem - total_hhee)
+            kpi3.metric("Horas Extras [HE]", total_hhee, delta_color="off")
             deficit_total = total_req_sem - total_prog_sem
-            kpi3.metric("Déficit Total Headcount", f"{deficit_total} turnos", delta=-deficit_total if deficit_total > 0 else 0, delta_color="inverse")
+            kpi4.metric("Déficit Faltante", f"{deficit_total}", delta=-deficit_total if deficit_total > 0 else 0, delta_color="inverse")
 
-            df_reporte = pd.DataFrame(reporte_filas)
-            st.dataframe(df_reporte, use_container_width=True)
+            st.dataframe(pd.DataFrame(reporte_filas), use_container_width=True)
         else:
-            st.info("Configura los requerimientos en la pestaña **'🏢 Requerimiento por Sede'** para visualizar el resumen de faltantes.")
+            st.info("Configura los requerimientos en la pestaña **'🏢 Requerimiento por Sede'**.")
     except Exception as e:
-        st.error(f"Error al calcular reporte ejecutivo: {e}")
+        pass
 
-# --- TAB 2: CONFIGURACIÓN DE REQUERIMIENTOS POR SEDE ---
+# --- TAB 2, TAB 3, TAB 4 ---
 with tab2:
     st.subheader("🏢 Definir Cuántos Trabajadores Requiere Cada Sede")
-    st.markdown("Establece la cantidad de personal necesaria por cargo, sede y turno (Día / Noche).")
-
     try:
         res_sedes = supabase.table("sedes").select("nombre").eq("activa", True).execute().data
         sedes_opt = [s['nombre'] for s in res_sedes] if res_sedes else ["Sede 1", "Sede 2", "Sede 3"]
-    except Exception:
-        sedes_opt = ["Sede 1", "Sede 2", "Sede 3"]
+    except Exception: sedes_opt = ["Sede 1"]
 
     res_colabs = supabase.table("colaboradores").select("posicion").eq("activo", True).execute().data
     posiciones_opt = sorted(list(set(limpiar_posicion(c['posicion']) for c in res_colabs if c.get('posicion')))) if res_colabs else []
@@ -186,166 +157,90 @@ with tab2:
                 {"sede": sede_sel, "posicion": pos_sel, "turno": turno_sel, "cantidad": cant_sel},
                 on_conflict="sede,posicion,turno"
             ).execute()
-            st.success(f"✅ Requerimiento guardado: {cant_sel} {pos_sel} para {sede_sel} en turno {turno_sel}.")
+            st.success("Guardado.")
             st.cache_data.clear()
 
         st.divider()
         col_tit, col_btn = st.columns([3, 1])
-        with col_tit:
-            st.subheader("📋 Cobertura Actual Configurada")
+        with col_tit: st.subheader("📋 Cobertura Actual Configurada")
         with col_btn:
-            if st.button("🗑️ Vaciar Toda la Demanda"):
+            if st.button("🗑️ Vaciar Demanda"):
                 supabase.table("demanda_operativa").delete().neq("id", 0).execute()
-                st.warning("⚠️ Se han eliminado todos los requerimientos.")
                 st.cache_data.clear()
                 st.rerun()
 
         try:
             res_demanda = supabase.table("demanda_operativa").select("*").execute().data
-            if res_demanda:
-                df_demanda = pd.DataFrame(res_demanda)[["sede", "posicion", "turno", "cantidad"]]
-                df_demanda.columns = ["Sede", "Posición / Cargo", "Turno", "Personal Requerido"]
-                st.dataframe(df_demanda, use_container_width=True)
-            else:
-                st.info("Aún no has configurado requerimientos específicos.")
-        except Exception:
-            st.info("Crea la tabla 'demanda_operativa' en Supabase.")
-    else:
-        st.warning("Primero debes importar o registrar colaboradores.")
+            if res_demanda: st.dataframe(pd.DataFrame(res_demanda)[["sede", "posicion", "turno", "cantidad"]], use_container_width=True)
+        except: pass
 
-# --- TAB 3: REGISTRO DE INCIDENCIAS ---
 with tab3:
     st.subheader("Registrar Bloqueo por Vacaciones, DM o Incidencia")
-    
     res_colab = supabase.table("colaboradores").select("id, nombre, posicion").eq("activo", True).execute()
     opciones_colab = {f"{c['nombre']} ({limpiar_posicion(c['posicion'])})": c['id'] for c in res_colab.data} if res_colab.data else {}
-    
     if opciones_colab:
         colab_sel = st.selectbox("Seleccionar Colaborador:", list(opciones_colab.keys()))
         tipo_incidencia = st.selectbox("Tipo de Incidencia:", ["VACACIONES", "DM", "DESCANSO_SOLICITADO"])
-        
         c1, c2 = st.columns(2)
-        fecha_inicio_inc = c1.date_input("Fecha Inicio:", date.today())
-        fecha_fin_inc = c2.date_input("Fecha Fin:", date.today())
-        
+        f_ini = c1.date_input("Inicio:")
+        f_fin = c2.date_input("Fin:")
         if st.button("💾 Guardar Restricción"):
-            colab_id = opciones_colab[colab_sel]
-            data_incidencia = {
-                "colaborador_id": colab_id,
-                "fecha_inicio": str(fecha_inicio_inc),
-                "fecha_fin": str(fecha_fin_inc),
-                "tipo": tipo_incidencia
-            }
-            supabase.table("restricciones_fechas").insert(data_incidencia).execute()
-            st.success(f"Restricción registrada para {colab_sel}.")
+            supabase.table("restricciones_fechas").insert({"colaborador_id": opciones_colab[colab_sel], "fecha_inicio": str(f_ini), "fecha_fin": str(f_fin), "tipo": tipo_incidencia}).execute()
+            st.success("Restricción guardada.")
             st.cache_data.clear()
-    else:
-        st.warning("No hay colaboradores disponibles.")
 
-# --- TAB 4: GESTIÓN DE PERSONAL Y SEDES ---
 with tab4:
     col_izq, col_der = st.columns(2)
-
     with col_izq:
-        st.subheader("👨‍💼 Gestión de Colaboradores")
-        
-        with st.expander("📁 Carga Masiva desde Excel / CSV", expanded=True):
-            st.markdown("Subir el archivo Excel (.xlsx o .csv) con la lista de colaboradores.")
-            archivo_excel = st.file_uploader("Selecciona tu archivo Excel (.xlsx o .csv):", type=["xlsx", "csv"])
-            
-            if archivo_excel is not None:
-                try:
-                    if archivo_excel.name.endswith('.csv'):
-                        df_cargado = pd.read_csv(archivo_excel)
-                    else:
-                        df_cargado = pd.read_excel(archivo_excel)
-                    
-                    df_cargado.columns = [str(c).strip() for c in df_cargado.columns]
-                    st.write("Vista previa:")
-                    st.dataframe(df_cargado.head(5))
-                    
-                    if st.button("📥 Importar Lista Completa"):
-                        nuevos_registros = []
-                        for _, row in df_cargado.iterrows():
-                            raw_codigo = row.iloc[0]
-                            raw_nombre = row.iloc[1]
-                            raw_posicion = row.iloc[2]
-
-                            if pd.isna(raw_codigo) or pd.isna(raw_nombre): continue
-
-                            try:
-                                val_codigo = str(int(float(raw_codigo))).strip()
-                            except ValueError:
-                                val_codigo = str(raw_codigo).strip()
-
-                            val_nombre = str(raw_nombre).strip()
-                            val_posicion = limpiar_posicion(str(raw_posicion)) if not pd.isna(raw_posicion) else "General"
-                            
-                            nuevos_registros.append({
-                                "codigo": val_codigo,
-                                "nombre": val_nombre,
-                                "posicion": val_posicion,
-                                "he_acumuladas": 0.0,
-                                "dias_pendientes_recuperacion": 0,
-                                "activo": True
-                            })
-                        
-                        if nuevos_registros:
-                            supabase.table("colaboradores").insert(nuevos_registros).execute()
-                            st.success(f"✅ ¡Se registraron {len(nuevos_registros)} colaboradores!")
-                            st.cache_data.clear()
-                except Exception as e:
-                    st.error(f"Error al procesar el archivo. Detalle: {e}")
-
-        with st.expander("➕ Agregar Manualmente"):
-            with st.form("form_nuevo_colab", clear_on_submit=True):
-                nuevo_codigo = st.text_input("Código:")
-                nuevo_nombre = st.text_input("Nombre Completo:")
-                nueva_posicion = st.text_input("Posición:")
-                btn_agregar_emp = st.form_submit_button("Guardar Colaborador")
-                
-                if btn_agregar_emp and nuevo_codigo and nuevo_nombre:
-                    supabase.table("colaboradores").insert({
-                        "codigo": nuevo_codigo, "nombre": nuevo_nombre, "posicion": limpiar_posicion(nueva_posicion),
-                        "he_acumuladas": 0.0, "dias_pendientes_recuperacion": 0, "activo": True
-                    }).execute()
-                    st.success(f"✅ {nuevo_nombre} registrado.")
+        st.subheader("👨‍💼 Colaboradores")
+        with st.expander("📁 Carga Masiva (Excel/CSV)"):
+            archivo = st.file_uploader("Selecciona archivo:", type=["xlsx", "csv"])
+            if archivo and st.button("📥 Importar Lista"):
+                df = pd.read_csv(archivo) if archivo.name.endswith('.csv') else pd.read_excel(archivo)
+                df.columns = [str(c).strip() for c in df.columns]
+                regs = []
+                for _, row in df.iterrows():
+                    if pd.isna(row.iloc[0]) or pd.isna(row.iloc[1]): continue
+                    try: cod = str(int(float(row.iloc[0])))
+                    except: cod = str(row.iloc[0]).strip()
+                    pos = limpiar_posicion(str(row.iloc[2])) if not pd.isna(row.iloc[2]) else "General"
+                    regs.append({"codigo": cod, "nombre": str(row.iloc[1]).strip(), "posicion": pos, "he_acumuladas": 0.0, "dias_pendientes_recuperacion": 0, "activo": True})
+                if regs:
+                    supabase.table("colaboradores").insert(regs).execute()
+                    st.success(f"¡{len(regs)} registrados!")
                     st.cache_data.clear()
-
-        with st.expander("🗑️ Dar de Baja Colaborador"):
-            res_activos = supabase.table("colaboradores").select("id, nombre, codigo").eq("activo", True).execute()
-            list_activos = {f"[{c['codigo']}] {c['nombre']}": c['id'] for c in res_activos.data} if res_activos.data else {}
-            
-            if list_activos:
-                emp_a_eliminar = st.selectbox("Seleccionar Colaborador:", list(list_activos.keys()))
+        
+        with st.expander("➕ Agregar Manual"):
+            with st.form("f_emp", clear_on_submit=True):
+                cod, nom, pos = st.text_input("Código:"), st.text_input("Nombre:"), st.text_input("Posición:")
+                if st.form_submit_button("Guardar") and nom:
+                    supabase.table("colaboradores").insert({"codigo": cod, "nombre": nom, "posicion": limpiar_posicion(pos), "he_acumuladas": 0, "dias_pendientes_recuperacion": 0, "activo": True}).execute()
+                    st.cache_data.clear()
+        
+        with st.expander("🗑️ Dar de Baja"):
+            res_activos = supabase.table("colaboradores").select("id, nombre").eq("activo", True).execute().data
+            if res_activos:
+                opts = {c['nombre']: c['id'] for c in res_activos}
+                sel = st.selectbox("Colaborador:", list(opts.keys()))
                 if st.button("🚫 Dar de Baja"):
-                    supabase.table("colaboradores").update({"activo": False}).eq("id", list_activos[emp_a_eliminar]).execute()
-                    st.warning(f"{emp_a_eliminar} ha sido dado de baja.")
+                    supabase.table("colaboradores").update({"activo": False}).eq("id", opts[sel]).execute()
                     st.cache_data.clear()
 
     with col_der:
-        st.subheader("🏢 Gestión de Sedes")
-        
-        with st.expander("➕ Agregar Nueva Sede", expanded=True):
-            with st.form("form_nueva_sede", clear_on_submit=True):
-                nombre_sede = st.text_input("Nombre de la Sede:")
-                btn_agregar_sede = st.form_submit_button("Guardar Sede")
-                
-                if btn_agregar_sede and nombre_sede:
-                    supabase.table("sedes").insert({"nombre": nombre_sede, "activa": True}).execute()
-                    st.success(f"✅ {nombre_sede} creada.")
+        st.subheader("🏢 Sedes")
+        with st.expander("➕ Agregar Sede"):
+            with st.form("f_sede", clear_on_submit=True):
+                nom_sede = st.text_input("Sede:")
+                if st.form_submit_button("Guardar") and nom_sede:
+                    supabase.table("sedes").insert({"nombre": nom_sede, "activa": True}).execute()
                     st.cache_data.clear()
-
         with st.expander("🗑️ Eliminar Sede"):
             try:
-                res_sedes = supabase.table("sedes").select("id, nombre").eq("activa", True).execute()
-                list_sedes = {s['nombre']: s['id'] for s in res_sedes.data} if res_sedes.data else {}
-                
-                if list_sedes:
-                    sede_a_eliminar = st.selectbox("Seleccionar Sede:", list(list_sedes.keys()))
-                    if st.button("🗑️ Eliminar Sede"):
-                        supabase.table("sedes").update({"activa": False}).eq("id", list_sedes[sede_a_eliminar]).execute()
-                        st.warning(f"{sede_a_eliminar} eliminada.")
+                res_sedes = supabase.table("sedes").select("id, nombre").eq("activa", True).execute().data
+                if res_sedes:
+                    opts_s = {s['nombre']: s['id'] for s in res_sedes}
+                    sel_s = st.selectbox("Sede:", list(opts_s.keys()))
+                    if st.button("🗑️ Eliminar"):
+                        supabase.table("sedes").update({"activa": False}).eq("id", opts_s[sel_s]).execute()
                         st.cache_data.clear()
-            except Exception:
-                st.info("Crea la tabla 'sedes' en Supabase.")
+            except: pass
