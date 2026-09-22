@@ -5,13 +5,14 @@ from datetime import date, timedelta
 from supabase import create_client, Client
 from engine import generar_malla_semanal, limpiar_posicion, registrar_incidencia_diaria
 
-st.set_page_config(page_title="Sistema WFM - Control de Tareo", page_icon="⚙️", layout="wide")
+st.set_page_config(page_title="Tareo de Operaciones - Fargoline", page_icon="📦", layout="wide")
 
 SUPABASE_URL = "https://vsnyqynjaxdmofyewfcq.supabase.co"
 SUPABASE_KEY = "sb_publishable__wmHvw9dfAcu-o78te3iMg_9JqpAb_P"
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-st.title("⚙️ Sistema WFM - Panel de Administración")
+# Título Principal Personalizado
+st.title("📦 Tareo de Operaciones - Fargoline")
 dias_nombres = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
 
 with st.sidebar:
@@ -54,7 +55,7 @@ with tab1:
     opciones_sedes = ["Todas las Sedes"] + sedes_unicas
 
     col_s1, col_s2 = st.columns([3, 1])
-    with col_s1: sede_filtro = st.selectbox("🏢 Ver Malla por Sede Especifica:", opciones_sedes, index=0)
+    with col_s1: sede_filtro = st.selectbox("🏢 Ver Malla por Sede Específica:", opciones_sedes, index=0)
     with col_s2:
         st.write(""); st.write("")
         if st.button("🔄 Refrescar Vista"): st.cache_data.clear(); st.rerun()
@@ -349,7 +350,7 @@ with tab4:
             except: pass
 
 # =========================================================================
-# TAB 5: HISTÓRICO Y REPORTES (Con Botones de Borrado para Pruebas)
+# TAB 5: HISTÓRICO Y REPORTES (Con Botones de Borrado)
 # =========================================================================
 with tab5:
     st.subheader("🗂️ Consulta de Histórico General")
@@ -410,7 +411,6 @@ with tab5:
     else:
         st.error("La 'Fecha de Inicio' debe ser anterior o igual a la 'Fecha Fin'.")
 
-    # --- ZONA DE PELIGRO: BORRADO DE PRUEBAS ---
     st.write("---")
     with st.expander("⚠️ Zona de Peligro - Borrar Registros (Modo Pruebas)"):
         st.markdown("Usa estas herramientas para limpiar la base de datos de turnos y hacer pruebas desde cero.")
@@ -433,7 +433,6 @@ with tab5:
             confirm_delete_all = st.checkbox("Sí, estoy seguro de borrar todo el historial de turnos")
             if confirm_delete_all:
                 if st.button("🗑️ Vaciar Base de Datos Completamente", type="primary"):
-                    # Elimina todos los registros cuyo id no sea 0 (básicamente todos)
                     supabase.table("tareo_programado").delete().neq("id", 0).execute()
                     st.success("✅ ¡La base de datos de turnos ha quedado completamente limpia!")
                     st.cache_data.clear(); st.rerun()
