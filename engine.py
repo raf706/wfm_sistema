@@ -33,7 +33,7 @@ class CalculadorEquidad:
 
 def generar_malla_semanal(fecha_inicio: date, num_semanas: int = 1):
     print(f"\n==================================================")
-    print(f" GENERANDO TAREO CON DISPERSIÓN INTELIGENTE DE HHEE")
+    print(f" GENERANDO TAREO CON QA APROBADO (BLOQUEOS ACTIVOS)")
     print(f"==================================================\n")
 
     fecha_fin_total = fecha_inicio + timedelta(days=(7 * num_semanas) - 1)
@@ -82,13 +82,17 @@ def generar_malla_semanal(fecha_inicio: date, num_semanas: int = 1):
         lista_c.sort(key=lambda x: x['id'])
         for idx, c in enumerate(lista_c): offset_colaborador[c['id']] = idx
 
+    # CARGA HISTÓRICA PROFUNDA (14 DÍAS ATRÁS)
     historial_global = {c['id']: [] for c in colaboradores}
-    ayer_db = fecha_inicio - timedelta(days=7)
-    historial_previo = supabase.table("tareo_programado").select("colaborador_id, fecha, turno").gte("fecha", str(ayer_db)).lt("fecha", str(fecha_inicio)).execute().data
+    fecha_hist_inicio = fecha_inicio - timedelta(days=14)
+    historial_previo = supabase.table("tareo_programado").select("colaborador_id, fecha, turno, estado").gte("fecha", str(fecha_hist_inicio)).lt("fecha", str(fecha_inicio)).execute().data
+    
     if historial_previo:
         for t in historial_previo:
             if t['colaborador_id'] in historial_global:
-                historial_global[t['colaborador_id']].append({"fecha": t['fecha'], "turno": t['turno']})
+                # Solo contamos los que realmente trabajó
+                if t.get('estado') not in ['FALTA', 'DM', 'PERMISO']:
+                    historial_global[t['colaborador_id']].append({"fecha": str(t['fecha']), "turno": t['turno']})
 
     registros_a_insertar = []
     dias_nombres = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
@@ -120,6 +124,7 @@ def generar_malla_semanal(fecha_inicio: date, num_semanas: int = 1):
                 for emp in colaboradores:
                     if normalizar_posicion(emp['posicion']) != slot['posicion']: continue
                     
+                    # Validación 1: Vacaciones
                     esta_de_vacaciones = False
                     for r in restricciones:
                         if r['colaborador_id'] == emp['id'] and date.fromisoformat(r['fecha_inicio']) <= d <= date.fromisoformat(r['fecha_fin']):
@@ -129,23 +134,35 @@ def generar_malla_semanal(fecha_inicio: date, num_semanas: int = 1):
                     turnos_globales = historial_global[emp['id']]
                     turnos_esta_semana = historial_semana_actual[emp['id']]
                     
+                    # Validación 2: Ya tiene turno hoy
                     if any(t['fecha'] == str(d) for t in turnos_globales): continue
                     
+                    # Validación 3: Consistencia de Turno (Misma semana)
                     if turnos_esta_semana:
                         turno_base_semana = turnos_esta_semana[0]['turno']
                         if slot['turno'] != turno_base_semana: continue 
                     
+                    # =========================================================================
+                    # 🚨 QA HARD CONSTRAINTS (REGLAS DE BLOQUEO ABSOLUTO)
+                    # =========================================================================
+                    ayer = str(d - timedelta(days=1))
+                    
+                    # HARD CONSTRAINT A: Ruptura Biológica (Noche -> Día)
                     if turnos_globales:
-                        ultimo_turno = turnos_globales[-1]
-                        ayer = str(d - timedelta(days=1))
-                        if ultimo_turno['fecha'] == ayer and ultimo_turno['turno'] == "Noche" and slot['turno'] == "Día":
-                            continue 
-
+                        turno_ayer = next((t for t in turnos_globales if t['fecha'] == ayer), None)
+                        if turno_ayer and turno_ayer['turno'] == "Noche" and slot['turno'] == "Día":
+                            continue # BLOQUEO ABSOLUTO
+                    
+                    # HARD CONSTRAINT B: Días consecutivos excesivos (>6)
                     consecutivos = 0
                     temp_d = d - timedelta(days=1)
                     while any(t['fecha'] == str(temp_d) for t in turnos_globales):
                         consecutivos += 1
                         temp_d -= timedelta(days=1)
+                    
+                    if consecutivos >= 6:
+                        continue # BLOQUEO ABSOLUTO (Fuerza descanso)
+                    # =========================================================================
 
                     idx_emp = offset_colaborador.get(emp['id'], 0)
                     rest_start = (idx_emp * 2) % 7
@@ -157,7 +174,6 @@ def generar_malla_semanal(fecha_inicio: date, num_semanas: int = 1):
                         (slot['turno'] == "Noche"), len(turnos_esta_semana), consecutivos, es_descanso_pref
                     )
                     
-                    # Esta lógica prioriza matemáticamente la asignación
                     if len(turnos_esta_semana) < 4: candidatos_normales.append((score, emp))
                     elif len(turnos_esta_semana) < 6: candidatos_hhee.append((score, emp))
                     elif len(turnos_esta_semana) < 7: candidatos_emergencia.append((score, emp))
@@ -177,11 +193,10 @@ def generar_malla_semanal(fecha_inicio: date, num_semanas: int = 1):
                 historial_global[ganador['id']].append(nuevo_turno)
                 historial_semana_actual[ganador['id']].append(nuevo_turno)
 
-                # GUARDAMOS TEMPORALMENTE (Las HHEE se calcularán inteligentemente al final)
                 registros_a_insertar.append({
                     "colaborador_id": ganador['id'], "fecha": str(d), "sede": slot['sede'],
                     "turno": slot['turno'], "estado": "PROGRAMADO", 
-                    "semana_idx": semana # Variable temporal para el cálculo
+                    "semana_idx": semana 
                 })
 
     # =========================================================================
@@ -190,7 +205,6 @@ def generar_malla_semanal(fecha_inicio: date, num_semanas: int = 1):
     he_por_fecha = defaultdict(int)
     turnos_por_colab_semana = defaultdict(list)
     
-    # Agrupamos por semana y colaborador
     for r in registros_a_insertar:
         clave = (r['semana_idx'], r['colaborador_id'])
         turnos_por_colab_semana[clave].append(r)
@@ -198,15 +212,10 @@ def generar_malla_semanal(fecha_inicio: date, num_semanas: int = 1):
     for clave, lista_turnos in turnos_por_colab_semana.items():
         num_turnos = len(lista_turnos)
         if num_turnos > 4:
-            num_he = num_turnos - 4 # Cuántas HHEE reales tiene este trabajador
-            
-            # Mezclamos aleatoriamente para evitar que los empates se asignen siempre el lunes
+            num_he = num_turnos - 4 
             random.shuffle(lista_turnos)
-            
-            # Ordenamos los turnos buscando los días donde la EMPRESA tiene MENOS HHEE asignadas
             lista_turnos.sort(key=lambda x: he_por_fecha[x['fecha']])
             
-            # Asignamos la etiqueta [HE] a los primeros 'num_he' días de la lista ordenada
             for i, t in enumerate(lista_turnos):
                 if i < num_he:
                     t['es_hhee'] = True
@@ -217,14 +226,13 @@ def generar_malla_semanal(fecha_inicio: date, num_semanas: int = 1):
             for t in lista_turnos:
                 t['es_hhee'] = False
 
-    # Limpiamos el campo temporal de la semana antes de inyectar a la Base de Datos
     for r in registros_a_insertar:
         if 'semana_idx' in r:
             del r['semana_idx']
 
     if registros_a_insertar:
         supabase.table("tareo_programado").insert(registros_a_insertar).execute()
-        print(f"✅ Se han generado {len(registros_a_insertar)} turnos con HHEE dispersas exitosamente.")
+        print(f"✅ Se han generado {len(registros_a_insertar)} turnos. QA Passed.")
 
 def registrar_incidencia_diaria(fecha_inc: date, id_colab: int, tipo: str, requiere_reemplazo: bool):
     turnos = supabase.table("tareo_programado").select("*").eq("fecha", str(fecha_inc)).eq("colaborador_id", id_colab).execute().data
