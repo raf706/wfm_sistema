@@ -29,7 +29,7 @@ class CalculadorEquidad:
         if es_dia_descanso_preferido: score += 100.0
         return score
 
-# NUEVO: Agregamos el parámetro num_semanas
+# Acepta la cantidad de semanas a programar (por defecto 1)
 def generar_malla_semanal(fecha_inicio: date, num_semanas: int = 1):
     print(f"\n==================================================")
     print(f" GENERANDO TAREO PARA {num_semanas} SEMANA(S) - CONSERVA HISTÓRICO")
@@ -37,7 +37,7 @@ def generar_malla_semanal(fecha_inicio: date, num_semanas: int = 1):
 
     fecha_fin_total = fecha_inicio + timedelta(days=(7 * num_semanas) - 1)
     
-    # NUEVO: Solo borra el rango de fechas a programar. EL PASADO QUEDA INTACTO.
+    # Borra únicamente el rango de fechas seleccionado (conserva el histórico anterior)
     supabase.table("tareo_programado").delete().gte("fecha", str(fecha_inicio)).lte("fecha", str(fecha_fin_total)).execute()
 
     colaboradores = supabase.table("colaboradores").select("*").eq("activo", True).execute().data
@@ -70,10 +70,7 @@ def generar_malla_semanal(fecha_inicio: date, num_semanas: int = 1):
         lista_c.sort(key=lambda x: x['id'])
         for idx, c in enumerate(lista_c): offset_colaborador[c['id']] = idx
 
-    # Historial Global para arrastrar fatiga entre semanas
     historial_global = {c['id']: [] for c in colaboradores}
-    
-    # Traer la semana anterior de la BD para que la fatiga biológica no se rompa el Lunes
     ayer_db = fecha_inicio - timedelta(days=7)
     historial_previo = supabase.table("tareo_programado").select("colaborador_id, fecha, turno").gte("fecha", str(ayer_db)).lt("fecha", str(fecha_inicio)).execute().data
     if historial_previo:
@@ -83,12 +80,9 @@ def generar_malla_semanal(fecha_inicio: date, num_semanas: int = 1):
 
     registros_a_insertar = []
 
-    # Bucle por cada semana solicitada
     for semana in range(num_semanas):
         inicio_semana = fecha_inicio + timedelta(days=7 * semana)
         dias_semana = [inicio_semana + timedelta(days=i) for i in range(7)]
-        
-        # Historial que se resetea cada 7 días para la regla 4x3
         historial_semana_actual = {c['id']: [] for c in colaboradores}
 
         for idx_dia_semana, d in enumerate(dias_semana):
@@ -134,7 +128,6 @@ def generar_malla_semanal(fecha_inicio: date, num_semanas: int = 1):
                         (slot['turno'] == "Noche"), len(turnos_esta_semana), consecutivos, es_descanso_pref
                     )
                     
-                    # Limites PER SEMANA
                     if len(turnos_esta_semana) < 4: candidatos_normales.append((score, emp))
                     elif len(turnos_esta_semana) < 6: candidatos_hhee.append((score, emp))
                     elif len(turnos_esta_semana) < 7: candidatos_emergencia.append((score, emp))
