@@ -1,5 +1,7 @@
 from supabase import create_client, Client
 from datetime import date, timedelta
+import random
+from collections import defaultdict
 
 SUPABASE_URL = "https://vsnyqynjaxdmofyewfcq.supabase.co"
 SUPABASE_KEY = "sb_publishable__wmHvw9dfAcu-o78te3iMg_9JqpAb_P" 
@@ -31,7 +33,7 @@ class CalculadorEquidad:
 
 def generar_malla_semanal(fecha_inicio: date, num_semanas: int = 1):
     print(f"\n==================================================")
-    print(f" GENERANDO TAREO CON DEMANDA ESPECÍFICA POR DÍA")
+    print(f" GENERANDO TAREO CON DISPERSIÓN INTELIGENTE DE HHEE")
     print(f"==================================================\n")
 
     fecha_fin_total = fecha_inicio + timedelta(days=(7 * num_semanas) - 1)
@@ -55,11 +57,11 @@ def generar_malla_semanal(fecha_inicio: date, num_semanas: int = 1):
             t = item['turno']
             c = item.get('cantidad', 1)
 
-            if "_" in t: # Es un requerimiento específico de día (ej. Lunes_Día)
+            if "_" in t:
                 dia, turno_real = t.split("_")
                 demanda_especifica[(s, pos_norm, dia, turno_real)] = c
                 combinaciones.add((s, pos_norm, turno_real))
-            else: # Es un requerimiento base
+            else:
                 demanda_base[(s, pos_norm, t)] = c
                 combinaciones.add((s, pos_norm, t))
     else:
@@ -100,18 +102,15 @@ def generar_malla_semanal(fecha_inicio: date, num_semanas: int = 1):
             nombre_dia = dias_nombres[d.weekday()]
             slots_hoy = []
 
-            # 1. Armar la demanda específica del día
             for (s, p, t) in combinaciones:
-                # Prioriza la específica, si no hay, toma la base. Si no hay, toma 0.
                 cant = demanda_especifica.get((s, p, nombre_dia, t), demanda_base.get((s, p, t), 0))
                 for _ in range(cant):
                     slots_hoy.append({"sede": s, "posicion": p, "turno": t})
 
-            # Balanceo anti-embudo
             if idx_dia_semana % 2 == 0:
-                slots_hoy.sort(key=lambda x: x['turno']) # Día escoge primero
+                slots_hoy.sort(key=lambda x: x['turno'])
             else:
-                slots_hoy.sort(key=lambda x: x['turno'], reverse=True) # Noche escoge primero
+                slots_hoy.sort(key=lambda x: x['turno'], reverse=True)
 
             for slot in slots_hoy:
                 candidatos_normales = []
@@ -158,6 +157,7 @@ def generar_malla_semanal(fecha_inicio: date, num_semanas: int = 1):
                         (slot['turno'] == "Noche"), len(turnos_esta_semana), consecutivos, es_descanso_pref
                     )
                     
+                    # Esta lógica prioriza matemáticamente la asignación
                     if len(turnos_esta_semana) < 4: candidatos_normales.append((score, emp))
                     elif len(turnos_esta_semana) < 6: candidatos_hhee.append((score, emp))
                     elif len(turnos_esta_semana) < 7: candidatos_emergencia.append((score, emp))
@@ -165,29 +165,66 @@ def generar_malla_semanal(fecha_inicio: date, num_semanas: int = 1):
                 if candidatos_normales:
                     candidatos_normales.sort(key=lambda x: x[0])
                     ganador = candidatos_normales[0][1]
-                    es_hhee = False
                 elif candidatos_hhee:
                     candidatos_hhee.sort(key=lambda x: x[0])
                     ganador = candidatos_hhee[0][1]
-                    es_hhee = True
                 elif candidatos_emergencia:
                     candidatos_emergencia.sort(key=lambda x: x[0])
                     ganador = candidatos_emergencia[0][1]
-                    es_hhee = True
                 else: continue
 
                 nuevo_turno = {"fecha": str(d), "turno": slot['turno']}
                 historial_global[ganador['id']].append(nuevo_turno)
                 historial_semana_actual[ganador['id']].append(nuevo_turno)
 
+                # GUARDAMOS TEMPORALMENTE (Las HHEE se calcularán inteligentemente al final)
                 registros_a_insertar.append({
                     "colaborador_id": ganador['id'], "fecha": str(d), "sede": slot['sede'],
-                    "turno": slot['turno'], "estado": "PROGRAMADO", "es_hhee": es_hhee
+                    "turno": slot['turno'], "estado": "PROGRAMADO", 
+                    "semana_idx": semana # Variable temporal para el cálculo
                 })
+
+    # =========================================================================
+    # FASE 2: DISTRIBUCIÓN Y DISPERSIÓN INTELIGENTE DE HHEE
+    # =========================================================================
+    he_por_fecha = defaultdict(int)
+    turnos_por_colab_semana = defaultdict(list)
+    
+    # Agrupamos por semana y colaborador
+    for r in registros_a_insertar:
+        clave = (r['semana_idx'], r['colaborador_id'])
+        turnos_por_colab_semana[clave].append(r)
+        
+    for clave, lista_turnos in turnos_por_colab_semana.items():
+        num_turnos = len(lista_turnos)
+        if num_turnos > 4:
+            num_he = num_turnos - 4 # Cuántas HHEE reales tiene este trabajador
+            
+            # Mezclamos aleatoriamente para evitar que los empates se asignen siempre el lunes
+            random.shuffle(lista_turnos)
+            
+            # Ordenamos los turnos buscando los días donde la EMPRESA tiene MENOS HHEE asignadas
+            lista_turnos.sort(key=lambda x: he_por_fecha[x['fecha']])
+            
+            # Asignamos la etiqueta [HE] a los primeros 'num_he' días de la lista ordenada
+            for i, t in enumerate(lista_turnos):
+                if i < num_he:
+                    t['es_hhee'] = True
+                    he_por_fecha[t['fecha']] += 1
+                else:
+                    t['es_hhee'] = False
+        else:
+            for t in lista_turnos:
+                t['es_hhee'] = False
+
+    # Limpiamos el campo temporal de la semana antes de inyectar a la Base de Datos
+    for r in registros_a_insertar:
+        if 'semana_idx' in r:
+            del r['semana_idx']
 
     if registros_a_insertar:
         supabase.table("tareo_programado").insert(registros_a_insertar).execute()
-        print(f"✅ Se han generado {len(registros_a_insertar)} turnos exitosamente.")
+        print(f"✅ Se han generado {len(registros_a_insertar)} turnos con HHEE dispersas exitosamente.")
 
 def registrar_incidencia_diaria(fecha_inc: date, id_colab: int, tipo: str, requiere_reemplazo: bool):
     turnos = supabase.table("tareo_programado").select("*").eq("fecha", str(fecha_inc)).eq("colaborador_id", id_colab).execute().data
