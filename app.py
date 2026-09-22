@@ -15,228 +15,246 @@ st.title("⚙️ Sistema WFM - Panel de Administración")
 
 with st.sidebar:
     st.header("⚡ Acciones Rápidas")
-    fecha_seleccionada = st.date_input("Inicio de semana a programar:", date.today())
+    fecha_seleccionada = st.date_input("Inicio de malla (Lunes recomendado):", date.today())
+    num_semanas = st.selectbox("Semanas a programar / visualizar:", [1, 2, 3, 4], index=0)
     
-    if st.button("🚀 Recalcular Malla Semanal", type="primary"):
-        with st.spinner("Generando matriz con cobertura extrema..."):
-            generar_malla_semanal(fecha_seleccionada)
+    st.info("💡 La malla no borra tu historial. Solo sobrescribe las fechas seleccionadas.")
+    
+    if st.button("🚀 Recalcular Malla", type="primary"):
+        with st.spinner(f"Generando turnos para {num_semanas} semana(s)..."):
+            generar_malla_semanal(fecha_seleccionada, num_semanas)
             st.success("¡Malla actualizada correctamente!")
             st.cache_data.clear()
 
 tab1, tab2, tab3, tab4 = st.tabs([
     "📅 Matriz y Reporte Ejecutivo", 
-    "🏢 Requerimiento por Sede",
+    "🏢 Demanda Operativa Rápida",
     "🚨 Incidencias y Reemplazos", 
-    "👥 Gestión de Personal y Sedes"
+    "👥 Personal y Sedes"
 ])
 
-# --- TAB 1: MATRIZ Y REPORTE EJECUTIVO ---
+# =========================================================================
+# TAB 1: MATRIZ LIMPIA + APARTADO DE FILTRO POR SEDE
+# =========================================================================
 with tab1:
-    dias_semana = [str(fecha_seleccionada + timedelta(days=i)) for i in range(7)]
+    dias_totales = 7 * num_semanas
+    dias_semana = [str(fecha_seleccionada + timedelta(days=i)) for i in range(dias_totales)]
+    f_ini_s = str(fecha_seleccionada)
+    f_fin_s = str(fecha_seleccionada + timedelta(days=dias_totales - 1))
 
     @st.cache_data(ttl=5)
-    def cargar_matriz_tareo(f_inicio_str, f_fin_str, lista_dias):
+    def cargar_datos_tareo(f_inicio_str, f_fin_str):
         res = supabase.table("tareo_programado")\
             .select("fecha, turno, sede, es_hhee, estado, colaboradores(nombre, posicion)")\
             .gte("fecha", f_inicio_str)\
             .lte("fecha", f_fin_str)\
             .execute()
-        
-        if not res.data: return pd.DataFrame()
+        return res.data if res.data else []
 
-        filas = []
-        for row in res.data:
-            nombre_sede = row.get('sede', 'Sede 1')
-            turno_base = "D" if row['turno'] == "Día" else "N"
-            estado = row.get('estado')
-            
-            if estado in ['FALTA', 'DM', 'PERMISO']:
-                codigo_turno = f"❌ {estado}"
-            else:
-                if row.get('es_hhee'):
-                    codigo_turno = f"{turno_base} ({nombre_sede}) [HE]"
-                else:
-                    codigo_turno = f"{turno_base} ({nombre_sede})"
+    raw_data = cargar_datos_tareo(f_ini_s, f_fin_s)
 
-            filas.append({
-                "Colaborador": row['colaboradores']['nombre'],
-                "Posición": limpiar_posicion(row['colaboradores']['posicion']),
-                "Fecha": str(row['fecha']),
-                "Turno": codigo_turno
-            })
-        
-        df = pd.DataFrame(filas)
-        matriz = df.pivot_table(index=["Colaborador", "Posición"], columns="Fecha", values="Turno", aggfunc="first").fillna("L")
-        matriz = matriz.reindex(columns=lista_dias, fill_value="L")
-        return matriz
+    # Opciones para el filtro de Sedes
+    sedes_unicas = sorted(list(set(row.get('sede', 'Sede 1') for row in raw_data if row.get('sede')))) if raw_data else []
+    opciones_sedes = ["Todas las Sedes"] + sedes_unicas
 
-    f_ini_s = str(fecha_seleccionada)
-    f_fin_s = str(fecha_seleccionada + timedelta(days=6))
-    matriz_df = cargar_matriz_tareo(f_ini_s, f_fin_s, dias_semana)
-
-    col_title, col_btn_refresh = st.columns([4, 1])
-    with col_title:
-        st.subheader("📊 Cuadrante Semanal")
-    with col_btn_refresh:
-        if st.button("🔄 Actualizar Vista"):
+    col_s1, col_s2 = st.columns([3, 1])
+    with col_s1:
+        sede_filtro = st.selectbox("🏢 Ver Malla por Sede Especifica:", opciones_sedes, index=0)
+    with col_s2:
+        st.write("")
+        st.write("")
+        if st.button("🔄 Refrescar Vista"):
             st.cache_data.clear()
             st.rerun()
-            
-    if matriz_df.empty:
-        st.info("Haz clic en **'🚀 Recalcular Malla Semanal'** para generar el cuadrante.")
-    else:
+
+    filas = []
+    for row in raw_data:
+        nombre_sede = row.get('sede', 'Sede 1')
+        
+        # Filtro de Sede
+        if sede_filtro != "Todas las Sedes" and nombre_sede != sede_filtro:
+            continue
+
+        turno_base = "D" if row['turno'] == "Día" else "N"
+        estado = row.get('estado')
+        
+        # CELDAS ULTRA LIMPIAS: SIN NOMBRES DE SEDE EN PARENTESIS
+        if estado in ['FALTA', 'DM', 'PERMISO']:
+            codigo_turno = f"❌ {estado}"
+        else:
+            if row.get('es_hhee'): 
+                codigo_turno = f"{turno_base} [HE]"
+            else: 
+                codigo_turno = turno_base
+
+        filas.append({
+            "Colaborador": row['colaboradores']['nombre'],
+            "Posición": limpiar_posicion(row['colaboradores']['posicion']),
+            "Fecha": str(row['fecha']),
+            "Turno": codigo_turno
+        })
+
+    if filas:
+        df = pd.DataFrame(filas)
+        matriz_df = df.pivot_table(index=["Colaborador", "Posición"], columns="Fecha", values="Turno", aggfunc="first").fillna("L")
+        matriz_df = matriz_df.reindex(columns=dias_semana, fill_value="L")
+        
+        st.subheader(f"📊 Cuadrante Semanal — Vista: {sede_filtro}")
         st.dataframe(matriz_df, use_container_width=True)
         csv = matriz_df.to_csv().encode('utf-8')
-        st.download_button("📥 Descargar Reporte CSV", csv, f"tareo_{fecha_seleccionada}.csv", "text/csv")
+        st.download_button("📥 Descargar Reporte CSV", csv, f"tareo_{fecha_seleccionada}_{sede_filtro}.csv", "text/csv")
+    else:
+        st.info(f"No hay registros asignados para **{sede_filtro}** en este periodo. Haz clic en **'🚀 Recalcular Malla'**.")
 
     st.divider()
 
-    st.subheader("👔 Reporte Ejecutivo para Jefatura")
+    # --- REPORTE EJECUTIVO Y GRÁFICOS ---
+    st.subheader("👔 Reporte Ejecutivo Consolidado")
     try:
         res_dem = supabase.table("demanda_operativa").select("*").execute().data
-        res_prog = supabase.table("tareo_programado")\
-            .select("sede, turno, es_hhee, estado, colaboradores(posicion)")\
-            .gte("fecha", f_ini_s).lte("fecha", f_fin_s).execute().data
-
-        if res_dem:
+        if res_dem and raw_data:
             df_dem = pd.DataFrame(res_dem)
-            conteo_prog = {}
-            conteo_hhee = {}  
+            conteo_prog, conteo_hhee = {}, {}
             total_hhee = 0
-            if res_prog:
-                for p in res_prog:
-                    if p.get('estado') in ['FALTA', 'DM', 'PERMISO']: continue
-                    
-                    s = p['sede']
-                    t = p['turno']
-                    pos = limpiar_posicion(p['colaboradores']['posicion'])
-                    key = (s, pos, t)
-                    
-                    conteo_prog[key] = conteo_prog.get(key, 0) + 1
-                    
-                    if p.get('es_hhee'): 
-                        conteo_hhee[key] = conteo_hhee.get(key, 0) + 1
-                        total_hhee += 1
+            
+            for p in raw_data:
+                if p.get('estado') in ['FALTA', 'DM', 'PERMISO']: continue
+                s, t, pos = p['sede'], p['turno'], limpiar_posicion(p['colaboradores']['posicion'])
+                key = (s, pos, t)
+                conteo_prog[key] = conteo_prog.get(key, 0) + 1
+                if p.get('es_hhee'): 
+                    conteo_hhee[key] = conteo_hhee.get(key, 0) + 1
+                    total_hhee += 1
 
             reporte_filas = []
             total_req_sem, total_prog_sem = 0, 0
 
             for _, r in df_dem.iterrows():
                 s, pos, t, req_diario = r['sede'], limpiar_posicion(r['posicion']), r['turno'], r['cantidad']
-                req_semanal = req_diario * 7
-                
+                req_periodo = req_diario * 7 * num_semanas 
                 prog_semanal = conteo_prog.get((s, pos, t), 0)
                 hhee_semanal = conteo_hhee.get((s, pos, t), 0)
-                deficit_semanal = req_semanal - prog_semanal
+                deficit_semanal = req_periodo - prog_semanal
 
-                total_req_sem += req_semanal
+                total_req_sem += req_periodo
                 total_prog_sem += prog_semanal
-
                 estado = f"⚠️ Faltan {deficit_semanal}" if deficit_semanal > 0 else ("✅ Ok" if deficit_semanal == 0 else "🔵 Exceso")
 
                 reporte_filas.append({
                     "Sede": s, "Cargo": pos, "Turno": t,
-                    "Req. Diario": req_diario, "Req. Semana": req_semanal,
+                    "Req. Diario": req_diario, "Req. Periodo": req_periodo,
                     "Prog. Real": prog_semanal, "HHEE (Extras)": hhee_semanal, 
                     "Déficit Real": deficit_semanal if deficit_semanal > 0 else 0, "Estado": estado
                 })
 
-            # --- MÉTRICAS KPI ---
             kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-            kpi1.metric("Turnos Requeridos", total_req_sem)
+            kpi1.metric("Turnos Req. (Total Periodo)", total_req_sem)
             kpi2.metric("Turnos Normales", total_prog_sem - total_hhee)
             kpi3.metric("Horas Extras [HE]", total_hhee, delta_color="off")
             deficit_total = total_req_sem - total_prog_sem
             kpi4.metric("Déficit Faltante", f"{deficit_total}", delta=-deficit_total if deficit_total > 0 else 0, delta_color="inverse")
 
-            # --- TABLA EJECUTIVA ---
             df_reporte = pd.DataFrame(reporte_filas)
             st.dataframe(df_reporte, use_container_width=True)
 
-            # =========================================================
-            # NUEVO: GRÁFICOS INTERACTIVOS (COBERTURA Y HHEE POR SEDE)
-            # =========================================================
             if not df_reporte.empty:
                 st.divider()
                 st.subheader("📈 Análisis Gráfico de Cobertura y Presupuesto por Sede")
-                
-                # Agrupar los datos de la tabla por 'Sede'
-                df_sede = df_reporte.groupby('Sede', as_index=False)[['Req. Semana', 'Prog. Real', 'HHEE (Extras)', 'Déficit Real']].sum()
-                # Calcular Turnos Normales = Total Programado - Horas Extras
+                df_sede = df_reporte.groupby('Sede', as_index=False)[['Req. Periodo', 'Prog. Real', 'HHEE (Extras)', 'Déficit Real']].sum()
                 df_sede['Turnos Normales'] = df_sede['Prog. Real'] - df_sede['HHEE (Extras)']
 
-                col_graf1, col_graf2 = st.columns(2)
-
-                with col_graf1:
-                    # Gráfico 1: Turnos Programados vs Déficit Faltante
+                col_g1, col_g2 = st.columns(2)
+                with col_g1:
                     df_g1 = df_sede[['Sede', 'Prog. Real', 'Déficit Real']].melt(id_vars='Sede', var_name='Indicador', value_name='Turnos')
-                    fig1 = px.bar(df_g1, x='Sede', y='Turnos', color='Indicador', 
-                                  title='Nivel de Cobertura vs Déficit',
-                                  color_discrete_map={'Prog. Real': '#198754', 'Déficit Real': '#dc3545'}, 
-                                  text_auto=True)
+                    fig1 = px.bar(df_g1, x='Sede', y='Turnos', color='Indicador', title='Cobertura vs Déficit',
+                                  color_discrete_map={'Prog. Real': '#198754', 'Déficit Real': '#dc3545'}, text_auto=True)
                     fig1.update_layout(barmode='stack')
                     st.plotly_chart(fig1, use_container_width=True)
 
-                with col_graf2:
-                    # Gráfico 2: Composición del Costo (Turnos Normales vs Horas Extras)
+                with col_g2:
                     df_g2 = df_sede[['Sede', 'Turnos Normales', 'HHEE (Extras)']].melt(id_vars='Sede', var_name='Tipo de Turno', value_name='Cantidad')
-                    fig2 = px.bar(df_g2, x='Sede', y='Cantidad', color='Tipo de Turno', 
-                                  title='Composición Operativa: Normales vs HHEE',
-                                  color_discrete_map={'Turnos Normales': '#0d6efd', 'HHEE (Extras)': '#ffc107'}, 
-                                  text_auto=True)
+                    fig2 = px.bar(df_g2, x='Sede', y='Cantidad', color='Tipo de Turno', title='Composición Operativa: Normales vs HHEE',
+                                  color_discrete_map={'Turnos Normales': '#0d6efd', 'HHEE (Extras)': '#ffc107'}, text_auto=True)
                     fig2.update_layout(barmode='stack')
                     st.plotly_chart(fig2, use_container_width=True)
 
-        else:
-            st.info("Configura los requerimientos en la pestaña **'🏢 Requerimiento por Sede'**.")
-    except Exception as e:
-        pass
+    except Exception: pass
 
-# --- TAB 2 ---
+# =========================================================================
+# TAB 2: EDICIÓN MASIVA DE DEMANDA ESTILO EXCEL (SIN LISTAS DESPLEGABLES)
+# =========================================================================
 with tab2:
-    st.subheader("🏢 Definir Cuántos Trabajadores Requiere Cada Sede")
-    try:
-        res_sedes = supabase.table("sedes").select("nombre").eq("activa", True).execute().data
-        sedes_opt = [s['nombre'] for s in res_sedes] if res_sedes else ["Sede 1", "Sede 2", "Sede 3"]
-    except Exception: sedes_opt = ["Sede 1"]
+    st.subheader("🏢 Definir Demanda Operativa (Matriz Inteligente estilo Excel)")
+    st.markdown("Edita las cantidades necesarias haciendo **doble clic en los números**. Al finalizar, presiona **💾 Guardar Matriz Completa**.")
+
+    try: res_sedes = supabase.table("sedes").select("nombre").eq("activa", True).execute().data
+    except Exception: res_sedes = []
+    sedes_opt = [s['nombre'] for s in res_sedes] if res_sedes else []
 
     res_colabs = supabase.table("colaboradores").select("posicion").eq("activo", True).execute().data
     posiciones_opt = sorted(list(set(limpiar_posicion(c['posicion']) for c in res_colabs if c.get('posicion')))) if res_colabs else []
 
-    if posiciones_opt:
-        c1, c2, c3, c4 = st.columns(4)
-        sede_sel = c1.selectbox("Seleccionar Sede:", sedes_opt)
-        pos_sel = c2.selectbox("Cargo / Posición:", posiciones_opt)
-        turno_sel = c3.selectbox("Turno:", ["Día", "Noche"])
-        cant_sel = c4.number_input("Personal Requerido:", min_value=0, max_value=20, value=1)
-
-        if st.button("💾 Guardar Requerimiento"):
-            supabase.table("demanda_operativa").upsert(
-                {"sede": sede_sel, "posicion": pos_sel, "turno": turno_sel, "cantidad": cant_sel},
-                on_conflict="sede,posicion,turno"
-            ).execute()
-            st.success("Guardado.")
-            st.cache_data.clear()
-
+    if posiciones_opt and sedes_opt:
+        try: res_demanda = supabase.table("demanda_operativa").select("*").execute().data
+        except Exception: res_demanda = []
+        
+        demanda_dict = {}
+        if res_demanda:
+            for d in res_demanda:
+                demanda_dict[(d['sede'], d['posicion'], d['turno'])] = d['cantidad']
+        
+        filas_editor = []
+        for s in sedes_opt:
+            for p in posiciones_opt:
+                filas_editor.append({
+                    "Sede": s,
+                    "Posición": p,
+                    "Requerimiento DÍA": demanda_dict.get((s, p, "Día"), 0),
+                    "Requerimiento NOCHE": demanda_dict.get((s, p, "Noche"), 0)
+                })
+                
+        df_editor = pd.DataFrame(filas_editor)
+        
+        # TABLA EDITABLE INTEGRAL
+        edited_df = st.data_editor(
+            df_editor, 
+            use_container_width=True,
+            hide_index=True,
+            disabled=["Sede", "Posición"]
+        )
+        
         st.divider()
-        col_tit, col_btn = st.columns([3, 1])
-        with col_tit: st.subheader("📋 Cobertura Actual Configurada")
-        with col_btn:
-            if st.button("🗑️ Vaciar Demanda"):
+        c_btn1, c_btn2 = st.columns([2, 8])
+        with c_btn1:
+            if st.button("💾 Guardar Matriz Completa", type="primary"):
+                nuevos_registros = []
+                for _, row in edited_df.iterrows():
+                    s, p = row["Sede"], row["Posición"]
+                    c_dia, c_noche = int(row["Requerimiento DÍA"]), int(row["Requerimiento NOCHE"])
+                    
+                    if c_dia > 0: nuevos_registros.append({"sede": s, "posicion": p, "turno": "Día", "cantidad": c_dia})
+                    if c_noche > 0: nuevos_registros.append({"sede": s, "posicion": p, "turno": "Noche", "cantidad": c_noche})
+                        
                 supabase.table("demanda_operativa").delete().neq("id", 0).execute()
+                if nuevos_registros:
+                    supabase.table("demanda_operativa").insert(nuevos_registros).execute()
+                
+                st.success("✅ ¡Matriz de Demanda guardada exitosamente!")
                 st.cache_data.clear()
                 st.rerun()
-
-        try:
-            res_demanda = supabase.table("demanda_operativa").select("*").execute().data
-            if res_demanda: st.dataframe(pd.DataFrame(res_demanda)[["sede", "posicion", "turno", "cantidad"]], use_container_width=True)
-        except: pass
+                
+        with c_btn2:
+            if st.button("🗑️ Vaciar Toda la Demanda"):
+                supabase.table("demanda_operativa").delete().neq("id", 0).execute()
+                st.warning("⚠️ Todos los requerimientos se han borrado.")
+                st.cache_data.clear()
+                st.rerun()
+    else:
+        st.warning("Primero debes registrar colaboradores y sedes en la pestaña de Gestión.")
 
 # --- TAB 3: GESTIÓN DE INCIDENCIAS DIARIAS Y REEMPLAZOS ---
 with tab3:
     st.subheader("🚨 Registrar Faltas, DM o Permisos (Día a Día)")
-    st.markdown("Selecciona el día para ver quiénes están programados hoy y reportar si no asistieron.")
-    
     c_fecha, c_resto = st.columns([1, 2])
     fecha_incidencia = c_fecha.date_input("Seleccionar Fecha del Incidente:", date.today())
     
@@ -245,7 +263,6 @@ with tab3:
     
     if turnos_activos:
         opciones_hoy = {f"{t['colaboradores']['nombre']} - {t['turno']} ({t['sede']})": t['colaborador_id'] for t in turnos_activos}
-        
         with st.form("form_incidencia_diaria", clear_on_submit=True):
             colab_sel = st.selectbox("Colaborador que Ausentó:", list(opciones_hoy.keys()))
             motivo = st.selectbox("Motivo de la Ausencia:", ["FALTA", "DM", "PERMISO"])
@@ -257,18 +274,12 @@ with tab3:
                 if turnos_update:
                     st.cache_data.clear()
                     success, msg = registrar_incidencia_diaria(fecha_incidencia, id_c, motivo, reemplazar)
-                    if success:
-                        st.success(msg)
-                    else:
-                        st.error(msg)
-                else:
-                    st.error("No se encontró el turno para actualizar.")
-                
-    else:
-        st.info("No hay turnos programados activos para esta fecha.")
+                    if success: st.success(msg)
+                    else: st.error(msg)
+                else: st.error("No se encontró el turno para actualizar.")
+    else: st.info("No hay turnos programados activos para esta fecha.")
 
     st.divider()
-
     st.subheader("📅 Bloquear Fechas Futuras (Vacaciones)")
     res_colab = supabase.table("colaboradores").select("id, nombre, posicion").eq("activo", True).execute()
     opc_colab = {f"{c['nombre']} ({limpiar_posicion(c['posicion'])})": c['id'] for c in res_colab.data} if res_colab.data else {}
@@ -276,14 +287,12 @@ with tab3:
     if opc_colab:
         colab_vaca = st.selectbox("Seleccionar Colaborador para Vacaciones:", list(opc_colab.keys()))
         c1, c2 = st.columns(2)
-        f_ini = c1.date_input("Inicio:")
-        f_fin = c2.date_input("Fin:")
+        f_ini, f_fin = c1.date_input("Inicio:"), c2.date_input("Fin:")
         if st.button("💾 Guardar Vacaciones"):
             supabase.table("restricciones_fechas").insert({"colaborador_id": opc_colab[colab_vaca], "fecha_inicio": str(f_ini), "fecha_fin": str(f_fin), "tipo": "VACACIONES"}).execute()
-            st.success("Vacaciones guardadas.")
-            st.cache_data.clear()
+            st.success("Vacaciones guardadas."); st.cache_data.clear()
 
-# --- TAB 4 ---
+# --- TAB 4: GESTIÓN ---
 with tab4:
     col_izq, col_der = st.columns(2)
     with col_izq:
@@ -302,8 +311,7 @@ with tab4:
                     regs.append({"codigo": cod, "nombre": str(row.iloc[1]).strip(), "posicion": pos, "he_acumuladas": 0.0, "dias_pendientes_recuperacion": 0, "activo": True})
                 if regs:
                     supabase.table("colaboradores").insert(regs).execute()
-                    st.success(f"¡{len(regs)} registrados!")
-                    st.cache_data.clear()
+                    st.success(f"¡{len(regs)} registrados!"); st.cache_data.clear()
         
         with st.expander("➕ Agregar Manual"):
             with st.form("f_emp", clear_on_submit=True):
