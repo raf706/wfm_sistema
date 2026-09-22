@@ -26,15 +26,17 @@ with st.sidebar:
             st.success("¡Malla actualizada correctamente!")
             st.cache_data.clear()
 
-tab1, tab2, tab3, tab4 = st.tabs([
-    "📅 Matriz y Reporte Ejecutivo", 
-    "🏢 Demanda Operativa Dinámica",
-    "🚨 Incidencias y Reemplazos", 
-    "👥 Personal y Sedes"
+# NUEVO: 5 Pestañas
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    "📅 Matriz y Reporte", 
+    "🏢 Demanda Dinámica",
+    "🚨 Incidencias", 
+    "👥 Personal y Sedes",
+    "🗂️ Histórico"
 ])
 
 # =========================================================================
-# TAB 1: MATRIZ CON TURNO Y SEDE EN CELDA (1 Fila por Persona)
+# TAB 1: MATRIZ Y REPORTE EJECUTIVO
 # =========================================================================
 with tab1:
     dias_totales = 7 * num_semanas
@@ -66,12 +68,14 @@ with tab1:
         turno_base = "D" if row['turno'] == "Día" else "N"
         estado = row.get('estado')
         
-        # FORMATO: Turno (Sede) [HE]
         if estado in ['FALTA', 'DM', 'PERMISO']: 
             codigo_turno = f"❌ {estado}"
         else: 
             he_text = " [HE]" if row.get('es_hhee') else ""
-            codigo_turno = f"{turno_base} ({nombre_sede}){he_text}"
+            if sede_filtro == "Todas las Sedes":
+                codigo_turno = f"{turno_base} ({nombre_sede}){he_text}"
+            else:
+                codigo_turno = f"{turno_base}{he_text}"
 
         filas.append({
             "Colaborador": row['colaboradores']['nombre'],
@@ -82,7 +86,6 @@ with tab1:
 
     if filas:
         df = pd.DataFrame(filas)
-        # Índice de 2 campos: Colaborador y Posición (Evita filas duplicadas)
         matriz_df = df.pivot_table(index=["Colaborador", "Posición"], columns="Fecha", values="Turno", aggfunc="first").fillna("L")
         matriz_df = matriz_df.reindex(columns=dias_semana, fill_value="L")
         
@@ -90,7 +93,7 @@ with tab1:
         st.dataframe(matriz_df, use_container_width=True)
         csv = matriz_df.to_csv().encode('utf-8')
         st.download_button("📥 Descargar Reporte CSV", csv, f"tareo_{fecha_seleccionada}_{sede_filtro}.csv", "text/csv")
-    else: st.info(f"No hay registros asignados para **{sede_filtro}**.")
+    else: st.info(f"No hay registros asignados para **{sede_filtro}** en este periodo.")
 
     st.divider()
 
@@ -125,7 +128,6 @@ with tab1:
 
             for (s, pos, t) in sorted(combinaciones):
                 req_base = demanda_base.get((s, pos, t), 0)
-                
                 req_periodo = 0
                 for i in range(dias_totales):
                     d_fecha = fecha_seleccionada + timedelta(days=i)
@@ -251,12 +253,14 @@ with tab2:
                 st.cache_data.clear(); st.rerun()
                 
         with c_btn2:
-            if st.button("🗑️ Vaciar TODA la Demanda (Reset Total)"):
+            if st.button("🗑️ Vaciar TODA la Demanda"):
                 supabase.table("demanda_operativa").delete().neq("id", 0).execute()
                 st.warning("⚠️ Base y excepciones eliminadas."); st.cache_data.clear(); st.rerun()
     else: st.warning("Primero debes registrar colaboradores y sedes.")
 
-# --- TAB 3 Y TAB 4 ---
+# =========================================================================
+# TAB 3 Y TAB 4 (Gestión de Personal y Faltas)
+# =========================================================================
 with tab3:
     st.subheader("🚨 Registrar Faltas, DM o Permisos (Día a Día)")
     c_fecha, c_resto = st.columns([1, 2])
@@ -344,3 +348,82 @@ with tab4:
                         supabase.table("sedes").update({"activa": False}).eq("id", opts_s[sel_s]).execute()
                         st.cache_data.clear()
             except: pass
+
+# =========================================================================
+# TAB 5: HISTÓRICO Y REPORTES (NUEVO)
+# =========================================================================
+with tab5:
+    st.subheader("🗂️ Consulta de Histórico General")
+    st.markdown("Revisa el registro detallado de turnos de cualquier periodo, aplica filtros y descárgalo.")
+
+    c_f1, c_f2 = st.columns(2)
+    hist_ini = c_f1.date_input("📅 Fecha de Inicio:", date.today() - timedelta(days=7))
+    hist_fin = c_f2.date_input("📅 Fecha Fin:", date.today() + timedelta(days=7))
+
+    if hist_ini <= hist_fin:
+        @st.cache_data(ttl=5)
+        def fetch_historico(ini, fin):
+            res = supabase.table("tareo_programado")\
+                .select("fecha, turno, sede, es_hhee, estado, colaboradores(nombre, posicion)")\
+                .gte("fecha", str(ini))\
+                .lte("fecha", str(fin))\
+                .order("fecha")\
+                .execute()
+            return res.data
+
+        data_hist = fetch_historico(hist_ini, hist_fin)
+
+        if data_hist:
+            filas_hist = []
+            for r in data_hist:
+                filas_hist.append({
+                    "Fecha": r['fecha'],
+                    "Colaborador": r['colaboradores']['nombre'],
+                    "Cargo": limpiar_posicion(r['colaboradores']['posicion']),
+                    "Sede": r['sede'],
+                    "Turno": r['turno'],
+                    "Condición": "Hora Extra (HHEE)" if r['es_hhee'] else "Normal",
+                    "Estado": r['estado']
+                })
+
+            df_hist = pd.DataFrame(filas_hist)
+
+            st.write("---")
+            st.markdown("### 🔍 Filtros Inteligentes")
+            cf1, cf2, cf3 = st.columns(3)
+            nombres_unicos = sorted(df_hist["Colaborador"].unique())
+            sedes_unicas = sorted(df_hist["Sede"].unique())
+            estados_unicos = sorted(df_hist["Estado"].unique())
+
+            f_nombres = cf1.multiselect("Filtrar por Colaborador(es):", nombres_unicos)
+            f_sedes = cf2.multiselect("Filtrar por Sede(s):", sedes_unicas)
+            f_estados = cf3.multiselect("Filtrar por Estado:", estados_unicos)
+
+            df_filtrado = df_hist.copy()
+            if f_nombres:
+                df_filtrado = df_filtrado[df_filtrado["Colaborador"].isin(f_nombres)]
+            if f_sedes:
+                df_filtrado = df_filtrado[df_filtrado["Sede"].isin(f_sedes)]
+            if f_estados:
+                df_filtrado = df_filtrado[df_filtrado["Estado"].isin(f_estados)]
+
+            st.dataframe(df_filtrado, use_container_width=True, hide_index=True)
+
+            csv_hist = df_filtrado.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="📥 Descargar Base de Datos Filtrada (CSV)",
+                data=csv_hist,
+                file_name=f"historico_WFM_{hist_ini}_a_{hist_fin}.csv",
+                mime="text/csv"
+            )
+
+            st.write("---")
+            st.write("**📌 Resumen del periodo filtrado:**")
+            k1, k2, k3 = st.columns(3)
+            k1.metric("Total Turnos Registrados", len(df_filtrado))
+            k2.metric("Total Horas Extras", len(df_filtrado[df_filtrado["Condición"] == "Hora Extra (HHEE)"]))
+            k3.metric("Total Ausencias (Faltas/DM/Permisos)", len(df_filtrado[df_filtrado["Estado"].isin(["FALTA", "DM", "PERMISO"])]))
+        else:
+            st.info("No hay turnos registrados en este rango de fechas. Prueba ampliando la búsqueda.")
+    else:
+        st.error("La 'Fecha de Inicio' debe ser anterior o igual a la 'Fecha Fin'.")
