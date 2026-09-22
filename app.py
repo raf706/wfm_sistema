@@ -11,8 +11,19 @@ SUPABASE_URL = "https://vsnyqynjaxdmofyewfcq.supabase.co"
 SUPABASE_KEY = "sb_publishable__wmHvw9dfAcu-o78te3iMg_9JqpAb_P"
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# Título Principal Personalizado
-st.title("📦 Tareo de Operaciones - Fargoline")
+# --- CABECERA CON LOGO Y TÍTULO ---
+col_logo, col_title = st.columns([1, 7])
+with col_logo:
+    try:
+        # Intenta cargar el archivo local 'logo.png' subido a GitHub
+        st.image("logo.png", width=90)
+    except Exception:
+        # Muestra este ícono como respaldo si aún no se sube el archivo logo.png
+        st.title("📦")
+
+with col_title:
+    st.title("Tareo de Operaciones - Fargoline")
+
 dias_nombres = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
 
 with st.sidebar:
