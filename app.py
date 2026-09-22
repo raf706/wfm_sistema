@@ -17,7 +17,7 @@ with st.sidebar:
     fecha_seleccionada = st.date_input("Inicio de semana a programar:", date.today())
     
     if st.button("🚀 Recalcular Malla Semanal", type="primary"):
-        with st.spinner("Generando matriz con descansos escalonados y HHEE..."):
+        with st.spinner("Generando matriz con cobertura extrema..."):
             generar_malla_semanal(fecha_seleccionada)
             st.success("¡Malla actualizada correctamente!")
             st.cache_data.clear()
@@ -89,6 +89,7 @@ with tab1:
         if res_dem:
             df_dem = pd.DataFrame(res_dem)
             conteo_prog = {}
+            conteo_hhee = {}  # Nuevo contador específico para HHEE
             total_hhee = 0
             if res_prog:
                 for p in res_prog:
@@ -96,8 +97,13 @@ with tab1:
                     t = p['turno']
                     pos = limpiar_posicion(p['colaboradores']['posicion'])
                     key = (s, pos, t)
+                    
                     conteo_prog[key] = conteo_prog.get(key, 0) + 1
-                    if p.get('es_hhee'): total_hhee += 1
+                    
+                    # Contabilizar Horas Extras (HHEE) por sede y posición
+                    if p.get('es_hhee'): 
+                        conteo_hhee[key] = conteo_hhee.get(key, 0) + 1
+                        total_hhee += 1
 
             reporte_filas = []
             total_req_sem, total_prog_sem = 0, 0
@@ -105,7 +111,9 @@ with tab1:
             for _, r in df_dem.iterrows():
                 s, pos, t, req_diario = r['sede'], limpiar_posicion(r['posicion']), r['turno'], r['cantidad']
                 req_semanal = req_diario * 7
+                
                 prog_semanal = conteo_prog.get((s, pos, t), 0)
+                hhee_semanal = conteo_hhee.get((s, pos, t), 0)
                 deficit_semanal = req_semanal - prog_semanal
 
                 total_req_sem += req_semanal
@@ -114,9 +122,14 @@ with tab1:
                 estado = f"⚠️ Faltan {deficit_semanal}" if deficit_semanal > 0 else ("✅ Ok" if deficit_semanal == 0 else "🔵 Exceso")
 
                 reporte_filas.append({
-                    "Sede": s, "Cargo": pos, "Turno": t,
-                    "Req. Diario": req_diario, "Req. Semana": req_semanal,
-                    "Prog. Real": prog_semanal, "Déficit Real": deficit_semanal if deficit_semanal > 0 else 0,
+                    "Sede": s, 
+                    "Cargo": pos, 
+                    "Turno": t,
+                    "Req. Diario": req_diario, 
+                    "Req. Semana": req_semanal,
+                    "Prog. Real": prog_semanal, 
+                    "HHEE (Extras)": hhee_semanal,  # <--- COLUMNA AÑADIDA
+                    "Déficit Real": deficit_semanal if deficit_semanal > 0 else 0,
                     "Estado": estado
                 })
 

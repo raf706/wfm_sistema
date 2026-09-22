@@ -27,10 +27,7 @@ class CalculadorEquidad:
         if dias_deuda and dias_deuda > 0: score -= 50.0
         score += turnos_semana * 20.0 
         
-        # Penalizar días consecutivos para evitar bloques rígidos
         score += dias_consecutivos * 25.0 
-        
-        # Penalizar trabajar en el bloque de descanso asignado al colaborador
         if es_dia_descanso_preferido:
             score += 100.0
             
@@ -38,7 +35,7 @@ class CalculadorEquidad:
 
 def generar_malla_semanal(fecha_inicio: date):
     print(f"\n==================================================")
-    print(f" GENERANDO TAREO CON DESCANSOS ESCALONADOS Y HHEE")
+    print(f" GENERANDO TAREO CON HHEE EXTREMAS (COBERTURA TOTAL)")
     print(f"==================================================\n")
 
     supabase.table("tareo_programado").delete().neq("id", 0).execute()
@@ -65,7 +62,6 @@ def generar_malla_semanal(fecha_inicio: date):
             demanda_diaria.append({"sede": "Sede 1", "posicion": pos, "turno": "Día"})
             demanda_diaria.append({"sede": "Sede 1", "posicion": pos, "turno": "Noche"})
 
-    # Mapear índice a cada trabajador por cargo para escalonar descansos
     colabs_por_pos = {}
     for c in colaboradores:
         pos = normalizar_posicion(c['posicion'])
@@ -85,11 +81,11 @@ def generar_malla_semanal(fecha_inicio: date):
         for slot in demanda_diaria:
             candidatos_normales = []
             candidatos_hhee = []
+            candidatos_emergencia = [] # Nueva ronda para los que ya trabajaron 6 días
             
             for emp in colaboradores:
                 if normalizar_posicion(emp['posicion']) != slot['posicion']: continue
                 
-                # Filtro Vacaciones/DM
                 esta_de_vacaciones = False
                 for r in restricciones:
                     if r['colaborador_id'] == emp['id'] and date.fromisoformat(r['fecha_inicio']) <= d <= date.fromisoformat(r['fecha_fin']):
@@ -99,24 +95,20 @@ def generar_malla_semanal(fecha_inicio: date):
 
                 turnos_del_colaborador = historial_semana[emp['id']]
                 
-                # Regla: Máximo 1 turno por día
                 if any(t['fecha'] == str(d) for t in turnos_del_colaborador): continue
                 
-                # Filtro Biológico: Noche a Día prohibido
                 if turnos_del_colaborador:
                     ultimo_turno = turnos_del_colaborador[-1]
                     ayer = str(d - timedelta(days=1))
                     if ultimo_turno['fecha'] == ayer and ultimo_turno['turno'] == "Noche" and slot['turno'] == "Día":
                         continue 
 
-                # Contar días consecutivos trabajados hacia atrás
                 consecutivos = 0
                 temp_d = d - timedelta(days=1)
                 while any(t['fecha'] == str(temp_d) for t in turnos_del_colaborador):
                     consecutivos += 1
                     temp_d -= timedelta(days=1)
 
-                # Calcular si hoy cae en su ventana de descanso preferida
                 idx_emp = offset_colaborador.get(emp['id'], 0)
                 rest_start = (idx_emp * 2) % 7
                 dias_descanso_pref = [(rest_start + r) % 7 for r in range(3)]
@@ -127,13 +119,15 @@ def generar_malla_semanal(fecha_inicio: date):
                     (slot['turno'] == "Noche"), len(turnos_del_colaborador), consecutivos, es_descanso_pref
                 )
                 
-                # Clasificación por rondas (Normal vs Horas Extras)
+                # REGLAS DE REPARTO
                 if len(turnos_del_colaborador) < 4:
                     candidatos_normales.append((score, emp))
                 elif len(turnos_del_colaborador) < 6:
                     candidatos_hhee.append((score, emp))
+                elif len(turnos_del_colaborador) < 7: # MODO EMERGENCIA: Permite 7 días corridos si es vital
+                    candidatos_emergencia.append((score, emp))
 
-            # Selección del candidato ganador
+            # Elección prioritaria
             if candidatos_normales:
                 candidatos_normales.sort(key=lambda x: x[0])
                 ganador = candidatos_normales[0][1]
@@ -142,8 +136,12 @@ def generar_malla_semanal(fecha_inicio: date):
                 candidatos_hhee.sort(key=lambda x: x[0])
                 ganador = candidatos_hhee[0][1]
                 es_hhee = True
+            elif candidatos_emergencia:
+                candidatos_emergencia.sort(key=lambda x: x[0])
+                ganador = candidatos_emergencia[0][1]
+                es_hhee = True
             else:
-                continue
+                continue # Faltan personas para cubrir
 
             historial_semana[ganador['id']].append({"fecha": str(d), "turno": slot['turno']})
             registros_a_insertar.append({
