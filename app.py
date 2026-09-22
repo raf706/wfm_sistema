@@ -34,7 +34,7 @@ tab1, tab2, tab3, tab4 = st.tabs([
 ])
 
 # =========================================================================
-# TAB 1: MATRIZ Y REPORTE EJECUTIVO (Actualizado para Demanda Dinámica)
+# TAB 1: MATRIZ CON TURNO Y SEDE EN CELDA (1 Fila por Persona)
 # =========================================================================
 with tab1:
     dias_totales = 7 * num_semanas
@@ -66,20 +66,24 @@ with tab1:
         turno_base = "D" if row['turno'] == "Día" else "N"
         estado = row.get('estado')
         
-        if estado in ['FALTA', 'DM', 'PERMISO']: codigo_turno = f"❌ {estado}"
-        else: codigo_turno = f"{turno_base} [HE]" if row.get('es_hhee') else turno_base
+        # FORMATO: Turno (Sede) [HE]
+        if estado in ['FALTA', 'DM', 'PERMISO']: 
+            codigo_turno = f"❌ {estado}"
+        else: 
+            he_text = " [HE]" if row.get('es_hhee') else ""
+            codigo_turno = f"{turno_base} ({nombre_sede}){he_text}"
 
         filas.append({
             "Colaborador": row['colaboradores']['nombre'],
             "Posición": limpiar_posicion(row['colaboradores']['posicion']),
-            "Sede": nombre_sede,
             "Fecha": str(row['fecha']),
             "Turno": codigo_turno
         })
 
     if filas:
         df = pd.DataFrame(filas)
-        matriz_df = df.pivot_table(index=["Colaborador", "Posición", "Sede"], columns="Fecha", values="Turno", aggfunc="first").fillna("L")
+        # Índice de 2 campos: Colaborador y Posición (Evita filas duplicadas)
+        matriz_df = df.pivot_table(index=["Colaborador", "Posición"], columns="Fecha", values="Turno", aggfunc="first").fillna("L")
         matriz_df = matriz_df.reindex(columns=dias_semana, fill_value="L")
         
         st.subheader(f"📊 Cuadrante Semanal — Vista: {sede_filtro}")
@@ -177,7 +181,7 @@ with tab1:
     except Exception: pass
 
 # =========================================================================
-# TAB 2: DEMANDA DINÁMICA POR DÍAS O BASE GENERAL
+# TAB 2: DEMANDA DINÁMICA
 # =========================================================================
 with tab2:
     st.subheader("🏢 Definir Demanda Operativa (Matriz Inteligente)")
@@ -204,7 +208,6 @@ with tab2:
         if res_demanda:
             for d in res_demanda:
                 t = d['turno']
-                # Filtramos los datos que le mostramos a la matriz según el modo
                 if modo_demanda == "Demanda Base (Aplica a todos los días)":
                     if "_" not in t: demanda_dict[(d['sede'], d['posicion'], t)] = d['cantidad']
                 else:
@@ -253,7 +256,7 @@ with tab2:
                 st.warning("⚠️ Base y excepciones eliminadas."); st.cache_data.clear(); st.rerun()
     else: st.warning("Primero debes registrar colaboradores y sedes.")
 
-# --- TAB 3 y TAB 4 se mantienen intactas ---
+# --- TAB 3 Y TAB 4 ---
 with tab3:
     st.subheader("🚨 Registrar Faltas, DM o Permisos (Día a Día)")
     c_fecha, c_resto = st.columns([1, 2])
