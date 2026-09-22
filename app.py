@@ -34,7 +34,7 @@ tab1, tab2, tab3, tab4 = st.tabs([
 ])
 
 # =========================================================================
-# TAB 1: MATRIZ LIMPIA + APARTADO DE FILTRO POR SEDE
+# TAB 1: MATRIZ LIMPIA + COLUMNA SEDE + APARTADO DE FILTRO
 # =========================================================================
 with tab1:
     dias_totales = 7 * num_semanas
@@ -53,7 +53,6 @@ with tab1:
 
     raw_data = cargar_datos_tareo(f_ini_s, f_fin_s)
 
-    # Opciones para el filtro de Sedes
     sedes_unicas = sorted(list(set(row.get('sede', 'Sede 1') for row in raw_data if row.get('sede')))) if raw_data else []
     opciones_sedes = ["Todas las Sedes"] + sedes_unicas
 
@@ -71,14 +70,12 @@ with tab1:
     for row in raw_data:
         nombre_sede = row.get('sede', 'Sede 1')
         
-        # Filtro de Sede
         if sede_filtro != "Todas las Sedes" and nombre_sede != sede_filtro:
             continue
 
         turno_base = "D" if row['turno'] == "Día" else "N"
         estado = row.get('estado')
         
-        # CELDAS ULTRA LIMPIAS: SIN NOMBRES DE SEDE EN PARENTESIS
         if estado in ['FALTA', 'DM', 'PERMISO']:
             codigo_turno = f"❌ {estado}"
         else:
@@ -90,13 +87,15 @@ with tab1:
         filas.append({
             "Colaborador": row['colaboradores']['nombre'],
             "Posición": limpiar_posicion(row['colaboradores']['posicion']),
+            "Sede": nombre_sede, # <--- ¡NUEVA COLUMNA AÑADIDA!
             "Fecha": str(row['fecha']),
             "Turno": codigo_turno
         })
 
     if filas:
         df = pd.DataFrame(filas)
-        matriz_df = df.pivot_table(index=["Colaborador", "Posición"], columns="Fecha", values="Turno", aggfunc="first").fillna("L")
+        # Agregamos "Sede" al index para que sea una columna fija en la matriz web
+        matriz_df = df.pivot_table(index=["Colaborador", "Posición", "Sede"], columns="Fecha", values="Turno", aggfunc="first").fillna("L")
         matriz_df = matriz_df.reindex(columns=dias_semana, fill_value="L")
         
         st.subheader(f"📊 Cuadrante Semanal — Vista: {sede_filtro}")
@@ -181,7 +180,7 @@ with tab1:
     except Exception: pass
 
 # =========================================================================
-# TAB 2: EDICIÓN MASIVA DE DEMANDA ESTILO EXCEL (SIN LISTAS DESPLEGABLES)
+# TAB 2: EDICIÓN MASIVA DE DEMANDA ESTILO EXCEL
 # =========================================================================
 with tab2:
     st.subheader("🏢 Definir Demanda Operativa (Matriz Inteligente estilo Excel)")
@@ -215,7 +214,6 @@ with tab2:
                 
         df_editor = pd.DataFrame(filas_editor)
         
-        # TABLA EDITABLE INTEGRAL
         edited_df = st.data_editor(
             df_editor, 
             use_container_width=True,
