@@ -26,7 +26,6 @@ with st.sidebar:
             st.success("¡Malla actualizada correctamente!")
             st.cache_data.clear()
 
-# NUEVO: 5 Pestañas
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "📅 Matriz y Reporte", 
     "🏢 Demanda Dinámica",
@@ -259,7 +258,7 @@ with tab2:
     else: st.warning("Primero debes registrar colaboradores y sedes.")
 
 # =========================================================================
-# TAB 3 Y TAB 4 (Gestión de Personal y Faltas)
+# TAB 3 Y TAB 4 (Incidencias y Gestión de Personal)
 # =========================================================================
 with tab3:
     st.subheader("🚨 Registrar Faltas, DM o Permisos (Día a Día)")
@@ -350,25 +349,20 @@ with tab4:
             except: pass
 
 # =========================================================================
-# TAB 5: HISTÓRICO Y REPORTES (NUEVO)
+# TAB 5: HISTÓRICO Y REPORTES (Con Botones de Borrado para Pruebas)
 # =========================================================================
 with tab5:
     st.subheader("🗂️ Consulta de Histórico General")
     st.markdown("Revisa el registro detallado de turnos de cualquier periodo, aplica filtros y descárgalo.")
 
     c_f1, c_f2 = st.columns(2)
-    hist_ini = c_f1.date_input("📅 Fecha de Inicio:", date.today() - timedelta(days=7))
-    hist_fin = c_f2.date_input("📅 Fecha Fin:", date.today() + timedelta(days=7))
+    hist_ini = c_f1.date_input("📅 Fecha de Inicio:", date.today() - timedelta(days=7), key="hist_ini")
+    hist_fin = c_f2.date_input("📅 Fecha Fin:", date.today() + timedelta(days=7), key="hist_fin")
 
     if hist_ini <= hist_fin:
         @st.cache_data(ttl=5)
         def fetch_historico(ini, fin):
-            res = supabase.table("tareo_programado")\
-                .select("fecha, turno, sede, es_hhee, estado, colaboradores(nombre, posicion)")\
-                .gte("fecha", str(ini))\
-                .lte("fecha", str(fin))\
-                .order("fecha")\
-                .execute()
+            res = supabase.table("tareo_programado").select("fecha, turno, sede, es_hhee, estado, colaboradores(nombre, posicion)").gte("fecha", str(ini)).lte("fecha", str(fin)).order("fecha").execute()
             return res.data
 
         data_hist = fetch_historico(hist_ini, hist_fin)
@@ -377,15 +371,11 @@ with tab5:
             filas_hist = []
             for r in data_hist:
                 filas_hist.append({
-                    "Fecha": r['fecha'],
-                    "Colaborador": r['colaboradores']['nombre'],
-                    "Cargo": limpiar_posicion(r['colaboradores']['posicion']),
-                    "Sede": r['sede'],
-                    "Turno": r['turno'],
-                    "Condición": "Hora Extra (HHEE)" if r['es_hhee'] else "Normal",
+                    "Fecha": r['fecha'], "Colaborador": r['colaboradores']['nombre'],
+                    "Cargo": limpiar_posicion(r['colaboradores']['posicion']), "Sede": r['sede'],
+                    "Turno": r['turno'], "Condición": "Hora Extra (HHEE)" if r['es_hhee'] else "Normal",
                     "Estado": r['estado']
                 })
-
             df_hist = pd.DataFrame(filas_hist)
 
             st.write("---")
@@ -400,22 +390,14 @@ with tab5:
             f_estados = cf3.multiselect("Filtrar por Estado:", estados_unicos)
 
             df_filtrado = df_hist.copy()
-            if f_nombres:
-                df_filtrado = df_filtrado[df_filtrado["Colaborador"].isin(f_nombres)]
-            if f_sedes:
-                df_filtrado = df_filtrado[df_filtrado["Sede"].isin(f_sedes)]
-            if f_estados:
-                df_filtrado = df_filtrado[df_filtrado["Estado"].isin(f_estados)]
+            if f_nombres: df_filtrado = df_filtrado[df_filtrado["Colaborador"].isin(f_nombres)]
+            if f_sedes: df_filtrado = df_filtrado[df_filtrado["Sede"].isin(f_sedes)]
+            if f_estados: df_filtrado = df_filtrado[df_filtrado["Estado"].isin(f_estados)]
 
             st.dataframe(df_filtrado, use_container_width=True, hide_index=True)
 
             csv_hist = df_filtrado.to_csv(index=False).encode('utf-8')
-            st.download_button(
-                label="📥 Descargar Base de Datos Filtrada (CSV)",
-                data=csv_hist,
-                file_name=f"historico_WFM_{hist_ini}_a_{hist_fin}.csv",
-                mime="text/csv"
-            )
+            st.download_button(label="📥 Descargar Base de Datos Filtrada (CSV)", data=csv_hist, file_name=f"historico_WFM_{hist_ini}_a_{hist_fin}.csv", mime="text/csv")
 
             st.write("---")
             st.write("**📌 Resumen del periodo filtrado:**")
@@ -427,3 +409,31 @@ with tab5:
             st.info("No hay turnos registrados en este rango de fechas. Prueba ampliando la búsqueda.")
     else:
         st.error("La 'Fecha de Inicio' debe ser anterior o igual a la 'Fecha Fin'.")
+
+    # --- ZONA DE PELIGRO: BORRADO DE PRUEBAS ---
+    st.write("---")
+    with st.expander("⚠️ Zona de Peligro - Borrar Registros (Modo Pruebas)"):
+        st.markdown("Usa estas herramientas para limpiar la base de datos de turnos y hacer pruebas desde cero.")
+        c_del1, c_del2 = st.columns(2)
+        
+        with c_del1:
+            st.markdown("#### 📅 Borrar por Rango de Fechas")
+            del_ini = st.date_input("Desde:", date.today(), key="del_ini")
+            del_fin = st.date_input("Hasta:", date.today(), key="del_fin")
+            if st.button("🗑️ Borrar Rango Seleccionado", type="primary"):
+                if del_ini <= del_fin:
+                    supabase.table("tareo_programado").delete().gte("fecha", str(del_ini)).lte("fecha", str(del_fin)).execute()
+                    st.success(f"✅ Se han eliminado los turnos desde {del_ini} hasta {del_fin}.")
+                    st.cache_data.clear(); st.rerun()
+                else: st.error("La fecha 'Desde' debe ser anterior a 'Hasta'.")
+                
+        with c_del2:
+            st.markdown("#### 🚨 Borrar TODO el Histórico")
+            st.warning("Esto eliminará TODOS los turnos guardados en toda la historia de la base de datos. (Tus trabajadores y sedes NO se borrarán).")
+            confirm_delete_all = st.checkbox("Sí, estoy seguro de borrar todo el historial de turnos")
+            if confirm_delete_all:
+                if st.button("🗑️ Vaciar Base de Datos Completamente", type="primary"):
+                    # Elimina todos los registros cuyo id no sea 0 (básicamente todos)
+                    supabase.table("tareo_programado").delete().neq("id", 0).execute()
+                    st.success("✅ ¡La base de datos de turnos ha quedado completamente limpia!")
+                    st.cache_data.clear(); st.rerun()
