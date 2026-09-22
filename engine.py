@@ -31,7 +31,7 @@ class CalculadorEquidad:
 
 def generar_malla_semanal(fecha_inicio: date, num_semanas: int = 1):
     print(f"\n==================================================")
-    print(f" GENERANDO TAREO CON CONSISTENCIA DE TURNO (NO MEZCLAS)")
+    print(f" GENERANDO TAREO CON BALANCEO ANTI-EMBUDO DE TURNOS")
     print(f"==================================================\n")
 
     fecha_fin_total = fecha_inicio + timedelta(days=(7 * num_semanas) - 1)
@@ -84,7 +84,17 @@ def generar_malla_semanal(fecha_inicio: date, num_semanas: int = 1):
         historial_semana_actual = {c['id']: [] for c in colaboradores}
 
         for idx_dia_semana, d in enumerate(dias_semana):
-            for slot in demanda_diaria:
+            
+            # ====================================================================
+            # NUEVO: BALANCEO ANTI-EMBUDO. Intercambia qué turno elige personal primero.
+            # ====================================================================
+            slots_hoy = list(demanda_diaria)
+            if idx_dia_semana % 2 == 0:
+                slots_hoy.sort(key=lambda x: x['turno']) # Día escoge primero
+            else:
+                slots_hoy.sort(key=lambda x: x['turno'], reverse=True) # Noche escoge primero
+
+            for slot in slots_hoy:
                 candidatos_normales = []
                 candidatos_hhee = []
                 candidatos_emergencia = []
@@ -104,14 +114,11 @@ def generar_malla_semanal(fecha_inicio: date, num_semanas: int = 1):
                     
                     if any(t['fecha'] == str(d) for t in turnos_globales): continue
                     
-                    # =========================================================================
-                    # NUEVA REGLA ESTRICTA: CONSISTENCIA DE TURNO
-                    # Si ya trabajó en la semana, SOLO puede seguir en ese mismo turno (D o N)
-                    # =========================================================================
+                    # Consistencia de Turno Semanal (NO SE MEZCLAN)
                     if turnos_esta_semana:
                         turno_base_semana = turnos_esta_semana[0]['turno']
                         if slot['turno'] != turno_base_semana:
-                            continue # Lo descarta automáticamente para este slot
+                            continue 
                     
                     if turnos_globales:
                         ultimo_turno = turnos_globales[-1]
@@ -218,6 +225,3 @@ def registrar_incidencia_diaria(fecha_inc: date, id_colab: int, tipo: str, requi
                 msg += " ⚠️ No se encontró reemplazo."
 
     return True, msg
-
-if __name__ == "__main__":
-    generar_malla_semanal(date.today(), 1)
