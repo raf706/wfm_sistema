@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 from datetime import date, timedelta
 from supabase import create_client, Client
-from engine import generar_malla_semanal, limpiar_posicion
+from engine import generar_malla_semanal, limpiar_posicion, registrar_incidencia_diaria
 
 st.set_page_config(page_title="Sistema WFM - Control de Tareo", page_icon="⚙️", layout="wide")
 
@@ -25,7 +25,7 @@ with st.sidebar:
 tab1, tab2, tab3, tab4 = st.tabs([
     "📅 Matriz y Reporte Ejecutivo", 
     "🏢 Requerimiento por Sede",
-    "🚨 Registrar Incidencia / Vacaciones", 
+    "🚨 Incidencias y Reemplazos", 
     "👥 Gestión de Personal y Sedes"
 ])
 
@@ -35,8 +35,9 @@ with tab1:
 
     @st.cache_data(ttl=5)
     def cargar_matriz_tareo(f_inicio_str, f_fin_str, lista_dias):
+        # NOTA: Extraemos también el 'estado' de la base de datos
         res = supabase.table("tareo_programado")\
-            .select("fecha, turno, sede, es_hhee, colaboradores(nombre, posicion)")\
+            .select("fecha, turno, sede, es_hhee, estado, colaboradores(nombre, posicion)")\
             .gte("fecha", f_inicio_str)\
             .lte("fecha", f_fin_str)\
             .execute()
@@ -47,11 +48,16 @@ with tab1:
         for row in res.data:
             nombre_sede = row.get('sede', 'Sede 1')
             turno_base = "D" if row['turno'] == "Día" else "N"
+            estado = row.get('estado', 'PROGRAMADO')
             
-            if row.get('es_hhee'):
-                codigo_turno = f"{turno_base} ({nombre_sede}) [HE]"
+            # Lógica para pintar las faltas o los turnos normales
+            if estado in ['FALTA', 'DM', 'PERMISO']:
+                codigo_turno = f"❌ {estado}"
             else:
-                codigo_turno = f"{turno_base} ({nombre_sede})"
+                if row.get('es_hhee'):
+                    codigo_turno = f"{turno_base} ({nombre_sede}) [HE]"
+                else:
+                    codigo_turno = f"{turno_base} ({nombre_sede})"
 
             filas.append({
                 "Colaborador": row['colaboradores']['nombre'],
@@ -69,7 +75,7 @@ with tab1:
     f_fin_s = str(fecha_seleccionada + timedelta(days=6))
     matriz_df = cargar_matriz_tareo(f_ini_s, f_fin_s, dias_semana)
 
-    st.subheader("📊 Cuadrante Semanal (Los turnos en descanso se marcan con [HE])")
+    st.subheader("📊 Cuadrante Semanal")
     if matriz_df.empty:
         st.info("Haz clic en **'🚀 Recalcular Malla Semanal'** para generar el cuadrante.")
     else:
@@ -83,16 +89,18 @@ with tab1:
     try:
         res_dem = supabase.table("demanda_operativa").select("*").execute().data
         res_prog = supabase.table("tareo_programado")\
-            .select("sede, turno, es_hhee, colaboradores(posicion)")\
+            .select("sede, turno, es_hhee, estado, colaboradores(posicion)")\
             .gte("fecha", f_ini_s).lte("fecha", f_fin_s).execute().data
 
         if res_dem:
             df_dem = pd.DataFrame(res_dem)
             conteo_prog = {}
-            conteo_hhee = {}  # Nuevo contador específico para HHEE
+            conteo_hhee = {}  
             total_hhee = 0
             if res_prog:
                 for p in res_prog:
+                    if p.get('estado') in ['FALTA', 'DM', 'PERMISO']: continue # No contar a los que faltaron
+                    
                     s = p['sede']
                     t = p['turno']
                     pos = limpiar_posicion(p['colaboradores']['posicion'])
@@ -100,7 +108,6 @@ with tab1:
                     
                     conteo_prog[key] = conteo_prog.get(key, 0) + 1
                     
-                    # Contabilizar Horas Extras (HHEE) por sede y posición
                     if p.get('es_hhee'): 
                         conteo_hhee[key] = conteo_hhee.get(key, 0) + 1
                         total_hhee += 1
@@ -122,15 +129,10 @@ with tab1:
                 estado = f"⚠️ Faltan {deficit_semanal}" if deficit_semanal > 0 else ("✅ Ok" if deficit_semanal == 0 else "🔵 Exceso")
 
                 reporte_filas.append({
-                    "Sede": s, 
-                    "Cargo": pos, 
-                    "Turno": t,
-                    "Req. Diario": req_diario, 
-                    "Req. Semana": req_semanal,
-                    "Prog. Real": prog_semanal, 
-                    "HHEE (Extras)": hhee_semanal,  # <--- COLUMNA AÑADIDA
-                    "Déficit Real": deficit_semanal if deficit_semanal > 0 else 0,
-                    "Estado": estado
+                    "Sede": s, "Cargo": pos, "Turno": t,
+                    "Req. Diario": req_diario, "Req. Semana": req_semanal,
+                    "Prog. Real": prog_semanal, "HHEE (Extras)": hhee_semanal, 
+                    "Déficit Real": deficit_semanal if deficit_semanal > 0 else 0, "Estado": estado
                 })
 
             kpi1, kpi2, kpi3, kpi4 = st.columns(4)
@@ -141,12 +143,10 @@ with tab1:
             kpi4.metric("Déficit Faltante", f"{deficit_total}", delta=-deficit_total if deficit_total > 0 else 0, delta_color="inverse")
 
             st.dataframe(pd.DataFrame(reporte_filas), use_container_width=True)
-        else:
-            st.info("Configura los requerimientos en la pestaña **'🏢 Requerimiento por Sede'**.")
-    except Exception as e:
+    except Exception:
         pass
 
-# --- TAB 2, TAB 3, TAB 4 ---
+# --- TAB 2 ---
 with tab2:
     st.subheader("🏢 Definir Cuántos Trabajadores Requiere Cada Sede")
     try:
@@ -186,21 +186,57 @@ with tab2:
             if res_demanda: st.dataframe(pd.DataFrame(res_demanda)[["sede", "posicion", "turno", "cantidad"]], use_container_width=True)
         except: pass
 
+# --- TAB 3: GESTIÓN DE INCIDENCIAS DIARIAS Y REEMPLAZOS ---
 with tab3:
-    st.subheader("Registrar Bloqueo por Vacaciones, DM o Incidencia")
+    st.subheader("🚨 Registrar Faltas, DM o Permisos (Día a Día)")
+    st.markdown("Selecciona el día para ver quiénes están programados hoy y reportar si no asistieron.")
+    
+    # 1. Filtro Diario
+    c_fecha, c_resto = st.columns([1, 2])
+    fecha_incidencia = c_fecha.date_input("Seleccionar Fecha del Incidente:", date.today())
+    
+    # Extraer turnos programados del día seleccionado
+    res_turnos = supabase.table("tareo_programado").select("colaborador_id, turno, sede, estado, colaboradores(nombre, posicion)").eq("fecha", str(fecha_incidencia)).execute().data
+    turnos_activos = [t for t in res_turnos if t.get('estado') not in ['FALTA', 'DM', 'PERMISO']] if res_turnos else []
+    
+    if turnos_activos:
+        # Generar lista visual de asistentes programados
+        opciones_hoy = {f"{t['colaboradores']['nombre']} - {t['turno']} ({t['sede']})": t['colaborador_id'] for t in turnos_activos}
+        
+        with st.form("form_incidencia_diaria", clear_on_submit=True):
+            colab_sel = st.selectbox("Colaborador que Ausentó:", list(opciones_hoy.keys()))
+            motivo = st.selectbox("Motivo de la Ausencia:", ["FALTA", "DM", "PERMISO"])
+            reemplazar = st.checkbox("¿Buscar reemplazo automáticamente? (Se asignará como Hora Extra)", value=True)
+            
+            if st.form_submit_button("Registrar Ausencia e Iniciar Reemplazo"):
+                id_c = opciones_hoy[colab_sel]
+                success, msg = registrar_incidencia_diaria(fecha_incidencia, id_c, motivo, reemplazar)
+                if success:
+                    st.success(msg)
+                else:
+                    st.error(msg)
+                st.cache_data.clear()
+    else:
+        st.info("No hay turnos programados activos para esta fecha.")
+
+    st.divider()
+
+    # 2. Vacaciones Futuras
+    st.subheader("📅 Bloquear Fechas Futuras (Vacaciones)")
     res_colab = supabase.table("colaboradores").select("id, nombre, posicion").eq("activo", True).execute()
-    opciones_colab = {f"{c['nombre']} ({limpiar_posicion(c['posicion'])})": c['id'] for c in res_colab.data} if res_colab.data else {}
-    if opciones_colab:
-        colab_sel = st.selectbox("Seleccionar Colaborador:", list(opciones_colab.keys()))
-        tipo_incidencia = st.selectbox("Tipo de Incidencia:", ["VACACIONES", "DM", "DESCANSO_SOLICITADO"])
+    opc_colab = {f"{c['nombre']} ({limpiar_posicion(c['posicion'])})": c['id'] for c in res_colab.data} if res_colab.data else {}
+    
+    if opc_colab:
+        colab_vaca = st.selectbox("Seleccionar Colaborador para Vacaciones:", list(opc_colab.keys()))
         c1, c2 = st.columns(2)
         f_ini = c1.date_input("Inicio:")
         f_fin = c2.date_input("Fin:")
-        if st.button("💾 Guardar Restricción"):
-            supabase.table("restricciones_fechas").insert({"colaborador_id": opciones_colab[colab_sel], "fecha_inicio": str(f_ini), "fecha_fin": str(f_fin), "tipo": tipo_incidencia}).execute()
-            st.success("Restricción guardada.")
+        if st.button("💾 Guardar Vacaciones"):
+            supabase.table("restricciones_fechas").insert({"colaborador_id": opc_colab[colab_vaca], "fecha_inicio": str(f_ini), "fecha_fin": str(f_fin), "tipo": "VACACIONES"}).execute()
+            st.success("Vacaciones guardadas.")
             st.cache_data.clear()
 
+# --- TAB 4 ---
 with tab4:
     col_izq, col_der = st.columns(2)
     with col_izq:
