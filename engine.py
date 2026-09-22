@@ -31,32 +31,44 @@ class CalculadorEquidad:
 
 def generar_malla_semanal(fecha_inicio: date, num_semanas: int = 1):
     print(f"\n==================================================")
-    print(f" GENERANDO TAREO CON BALANCEO ANTI-EMBUDO DE TURNOS")
+    print(f" GENERANDO TAREO CON DEMANDA ESPECÍFICA POR DÍA")
     print(f"==================================================\n")
 
     fecha_fin_total = fecha_inicio + timedelta(days=(7 * num_semanas) - 1)
-    
     supabase.table("tareo_programado").delete().gte("fecha", str(fecha_inicio)).lte("fecha", str(fecha_fin_total)).execute()
 
     colaboradores = supabase.table("colaboradores").select("*").eq("activo", True).execute().data
     restricciones = supabase.table("restricciones_fechas").select("*").execute().data
-
     if not colaboradores: return
 
     try: res_demanda = supabase.table("demanda_operativa").select("*").execute().data
     except Exception: res_demanda = []
 
-    demanda_diaria = []
+    demanda_base = {}
+    demanda_especifica = {}
+    combinaciones = set()
+
     if res_demanda:
         for item in res_demanda:
             pos_norm = normalizar_posicion(item['posicion'])
-            for _ in range(item.get('cantidad', 1)):
-                demanda_diaria.append({"sede": item['sede'], "posicion": pos_norm, "turno": item['turno']})
+            s = item['sede']
+            t = item['turno']
+            c = item.get('cantidad', 1)
+
+            if "_" in t: # Es un requerimiento específico de día (ej. Lunes_Día)
+                dia, turno_real = t.split("_")
+                demanda_especifica[(s, pos_norm, dia, turno_real)] = c
+                combinaciones.add((s, pos_norm, turno_real))
+            else: # Es un requerimiento base
+                demanda_base[(s, pos_norm, t)] = c
+                combinaciones.add((s, pos_norm, t))
     else:
         posiciones_existentes = list(set(normalizar_posicion(c['posicion']) for c in colaboradores if c.get('posicion')))
         for pos in posiciones_existentes:
-            demanda_diaria.append({"sede": "Sede 1", "posicion": pos, "turno": "Día"})
-            demanda_diaria.append({"sede": "Sede 1", "posicion": pos, "turno": "Noche"})
+            combinaciones.add(("Sede 1", pos, "Día"))
+            combinaciones.add(("Sede 1", pos, "Noche"))
+            demanda_base[("Sede 1", pos, "Día")] = 1
+            demanda_base[("Sede 1", pos, "Noche")] = 1
 
     colabs_por_pos = {}
     for c in colaboradores:
@@ -77,6 +89,7 @@ def generar_malla_semanal(fecha_inicio: date, num_semanas: int = 1):
                 historial_global[t['colaborador_id']].append({"fecha": t['fecha'], "turno": t['turno']})
 
     registros_a_insertar = []
+    dias_nombres = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
 
     for semana in range(num_semanas):
         inicio_semana = fecha_inicio + timedelta(days=7 * semana)
@@ -84,11 +97,17 @@ def generar_malla_semanal(fecha_inicio: date, num_semanas: int = 1):
         historial_semana_actual = {c['id']: [] for c in colaboradores}
 
         for idx_dia_semana, d in enumerate(dias_semana):
-            
-            # ====================================================================
-            # NUEVO: BALANCEO ANTI-EMBUDO. Intercambia qué turno elige personal primero.
-            # ====================================================================
-            slots_hoy = list(demanda_diaria)
+            nombre_dia = dias_nombres[d.weekday()]
+            slots_hoy = []
+
+            # 1. Armar la demanda específica del día
+            for (s, p, t) in combinaciones:
+                # Prioriza la específica, si no hay, toma la base. Si no hay, toma 0.
+                cant = demanda_especifica.get((s, p, nombre_dia, t), demanda_base.get((s, p, t), 0))
+                for _ in range(cant):
+                    slots_hoy.append({"sede": s, "posicion": p, "turno": t})
+
+            # Balanceo anti-embudo
             if idx_dia_semana % 2 == 0:
                 slots_hoy.sort(key=lambda x: x['turno']) # Día escoge primero
             else:
@@ -105,8 +124,7 @@ def generar_malla_semanal(fecha_inicio: date, num_semanas: int = 1):
                     esta_de_vacaciones = False
                     for r in restricciones:
                         if r['colaborador_id'] == emp['id'] and date.fromisoformat(r['fecha_inicio']) <= d <= date.fromisoformat(r['fecha_fin']):
-                            esta_de_vacaciones = True
-                            break
+                            esta_de_vacaciones = True; break
                     if esta_de_vacaciones: continue
 
                     turnos_globales = historial_global[emp['id']]
@@ -114,11 +132,9 @@ def generar_malla_semanal(fecha_inicio: date, num_semanas: int = 1):
                     
                     if any(t['fecha'] == str(d) for t in turnos_globales): continue
                     
-                    # Consistencia de Turno Semanal (NO SE MEZCLAN)
                     if turnos_esta_semana:
                         turno_base_semana = turnos_esta_semana[0]['turno']
-                        if slot['turno'] != turno_base_semana:
-                            continue 
+                        if slot['turno'] != turno_base_semana: continue 
                     
                     if turnos_globales:
                         ultimo_turno = turnos_globales[-1]
@@ -177,9 +193,7 @@ def registrar_incidencia_diaria(fecha_inc: date, id_colab: int, tipo: str, requi
     turnos = supabase.table("tareo_programado").select("*").eq("fecha", str(fecha_inc)).eq("colaborador_id", id_colab).execute().data
     turno_valido = None
     for t in turnos:
-        if t.get('estado') not in ['FALTA', 'DM', 'PERMISO']:
-            turno_valido = t
-            break
+        if t.get('estado') not in ['FALTA', 'DM', 'PERMISO']: turno_valido = t; break
             
     if not turno_valido: return False, "No programado."
         
@@ -201,7 +215,6 @@ def registrar_incidencia_diaria(fecha_inc: date, id_colab: int, tipo: str, requi
             candidatos = []
             for emp in colaboradores:
                 if emp['id'] in ocupados_hoy or normalizar_posicion(emp['posicion']) != pos_req: continue
-                
                 bloqueado = False
                 for r in restricciones:
                     if r['colaborador_id'] == emp['id'] and date.fromisoformat(r['fecha_inicio']) <= fecha_inc <= date.fromisoformat(r['fecha_fin']):
@@ -221,7 +234,6 @@ def registrar_incidencia_diaria(fecha_inc: date, id_colab: int, tipo: str, requi
                     "turno": turno_req, "estado": "PROGRAMADO", "es_hhee": True
                 }).execute()
                 msg += f" Reemplazo automático: **{reemplazo['nombre']}** [HE]."
-            else:
-                msg += " ⚠️ No se encontró reemplazo."
+            else: msg += " ⚠️ No se encontró reemplazo."
 
     return True, msg
