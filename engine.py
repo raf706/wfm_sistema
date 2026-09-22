@@ -29,13 +29,12 @@ class CalculadorEquidad:
         score += turnos_semana * 20.0 
         score += dias_consecutivos * 25.0 
         if es_dia_descanso_preferido: score += 100.0
-        # Penalizamos levemente si el sistema lo quiere mandar a una sede distinta a la que ya fue esta semana
         if cambio_de_sede: score += 5.0 
         return score
 
 def generar_malla_semanal(fecha_inicio: date, num_semanas: int = 1):
     print(f"\n==================================================")
-    print(f" GENERANDO TAREO: ANCLAJE SEMANAL Y AFINIDAD DE SEDE")
+    print(f" GENERANDO TAREO: REGLA ESTRICTA D-N/N-D IMPOSIBLE")
     print(f"==================================================\n")
 
     fecha_fin_total = fecha_inicio + timedelta(days=(7 * num_semanas) - 1)
@@ -84,7 +83,6 @@ def generar_malla_semanal(fecha_inicio: date, num_semanas: int = 1):
         lista_c.sort(key=lambda x: x['id'])
         for idx, c in enumerate(lista_c): offset_colaborador[c['id']] = idx
 
-    # CARGA HISTÓRICA PROFUNDA (14 DÍAS ATRÁS)
     historial_global = {c['id']: [] for c in colaboradores}
     fecha_hist_inicio = fecha_inicio - timedelta(days=14)
     historial_previo = supabase.table("tareo_programado").select("colaborador_id, fecha, turno, sede, estado").gte("fecha", str(fecha_hist_inicio)).lt("fecha", str(fecha_inicio)).execute().data
@@ -137,31 +135,26 @@ def generar_malla_semanal(fecha_inicio: date, num_semanas: int = 1):
                     if any(t['fecha'] == str(d) for t in turnos_globales): continue
                     
                     # =========================================================================
-                    # 🚨 QA HARD CONSTRAINTS (REGLAS DE BLOQUEO ABSOLUTO ACTUALIZADAS)
+                    # 🚨 CANDADO DE HIERRO: REGLA D-N O N-D IMPOSIBLE (AL DÍA SIGUIENTE)
                     # =========================================================================
-                    
-                    # HARD CONSTRAINT C: Inercia de Turno Semanal (CRÍTICO)
-                    # Si ya trabajó en esta semana, NO PUEDE cambiar de turno (Día <-> Noche)
+                    if turnos_globales:
+                        ayer = str(d - timedelta(days=1))
+                        turno_ayer = next((t for t in turnos_globales if t['fecha'] == ayer), None)
+                        
+                        # Si el trabajador tuvo turno AYER y el turno de HOY es distinto...
+                        if turno_ayer and turno_ayer['turno'] != slot['turno']:
+                            # ES FÍSICAMENTE IMPOSIBLE (Ej: Ayer fue Día, Hoy Noche)
+                            # Se rechaza inmediatamente al candidato, forzándolo a tener un día 'L'
+                            continue 
+                    # =========================================================================
+
+                    # INERCIA SEMANAL (No mezclar D y N en la misma semana)
                     if turnos_esta_semana:
                         turno_base_semana = turnos_esta_semana[0]['turno']
                         if slot['turno'] != turno_base_semana: 
-                            continue # BLOQUEO ABSOLUTO: Lo anclamos a su turno inicial
-                    
-                    # Para el primer día de su semana, evaluamos cómo cerró su semana anterior
-                    elif turnos_globales:
-                        ayer = str(d - timedelta(days=1))
-                        anteayer = str(d - timedelta(days=2))
-                        turno_ayer = next((t for t in turnos_globales if t['fecha'] == ayer), None)
-                        turno_anteayer = next((t for t in turnos_globales if t['fecha'] == anteayer), None)
-                        
-                        # Si trabajó ayer, bloqueamos transiciones bruscas
-                        if turno_ayer:
-                            if turno_ayer['turno'] != slot['turno']:
-                                continue # BLOQUEO: Obligamos a que haya 1 día de descanso libre (L) antes de cambiar su reloj biológico.
-                        
-                        # Si descansó ayer, pero trabajó anteayer, permitimos rotación, pero con cuidado.
+                            continue
 
-                    # HARD CONSTRAINT B: Días consecutivos excesivos (>6)
+                    # LÍMITE DE FATIGA (>6 DÍAS SEGUIDOS = PROHIBIDO)
                     consecutivos = 0
                     temp_d = d - timedelta(days=1)
                     while any(t['fecha'] == str(temp_d) for t in turnos_globales):
@@ -169,15 +162,13 @@ def generar_malla_semanal(fecha_inicio: date, num_semanas: int = 1):
                         temp_d -= timedelta(days=1)
                     
                     if consecutivos >= 6:
-                        continue # BLOQUEO ABSOLUTO
-                    # =========================================================================
+                        continue 
 
                     idx_emp = offset_colaborador.get(emp['id'], 0)
                     rest_start = (idx_emp * 2) % 7
                     dias_descanso_pref = [(rest_start + r) % 7 for r in range(3)]
                     es_descanso_pref = (idx_dia_semana in dias_descanso_pref)
 
-                    # SOFT CONSTRAINT: Afinidad de Sede
                     cambio_de_sede = False
                     if turnos_esta_semana:
                         sede_base = turnos_esta_semana[0].get('sede')
@@ -214,7 +205,6 @@ def generar_malla_semanal(fecha_inicio: date, num_semanas: int = 1):
                     "semana_idx": semana 
                 })
 
-    # FASE 2: DISTRIBUCIÓN Y DISPERSIÓN INTELIGENTE DE HHEE
     he_por_fecha = defaultdict(int)
     turnos_por_colab_semana = defaultdict(list)
     
@@ -245,7 +235,7 @@ def generar_malla_semanal(fecha_inicio: date, num_semanas: int = 1):
 
     if registros_a_insertar:
         supabase.table("tareo_programado").insert(registros_a_insertar).execute()
-        print(f"✅ Se han generado {len(registros_a_insertar)} turnos (QA V3 Passed).")
+        print(f"✅ Se han generado {len(registros_a_insertar)} turnos (QA: D-N Prohibido Activo).")
 
 def registrar_incidencia_diaria(fecha_inc: date, id_colab: int, tipo: str, requiere_reemplazo: bool):
     turnos = supabase.table("tareo_programado").select("*").eq("fecha", str(fecha_inc)).eq("colaborador_id", id_colab).execute().data
@@ -281,7 +271,7 @@ def registrar_incidencia_diaria(fecha_inc: date, id_colab: int, tipo: str, requi
                 
                 ayer = fecha_inc - timedelta(days=1)
                 t_ayer = supabase.table("tareo_programado").select("turno").eq("fecha", str(ayer)).eq("colaborador_id", emp['id']).execute().data
-                if t_ayer and t_ayer[0]['turno'] != turno_req: continue
+                if t_ayer and t_ayer[0]['turno'] != turno_req: continue # Mantiene la regla D-N al buscar reemplazos
                     
                 candidatos.append(emp)
                 
