@@ -6,18 +6,23 @@ SUPABASE_KEY = "sb_publishable__wmHvw9dfAcu-o78te3iMg_9JqpAb_P"
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# Regla temporal de equivalencia
+# Equivalencia temporal del motor
 EQUIVALENCIAS_POSICION = {
     "Controlador de Patio": "Controlador de Exportaciones",
 }
 
-def normalizar_posicion(pos: str) -> str:
+def limpiar_posicion(pos: str) -> str:
+    """Limpia formato (mayúsculas, 'de', 'y') sin aplicar equivalencias."""
     if not pos:
         return ""
-    # Estandariza "De" -> "de", "Y" -> "y" y elimina espacios extra
     pos_clean = pos.strip().title()
     pos_clean = pos_clean.replace(" De ", " de ").replace(" Y ", " y ")
-    return EQUIVALENCIAS_POSICION.get(pos_clean, pos_clean)
+    return pos_clean
+
+def normalizar_posicion(pos: str) -> str:
+    """Aplica formato limpio Y la regla de equivalencia para el cálculo del motor."""
+    clean = limpiar_posicion(pos)
+    return EQUIVALENCIAS_POSICION.get(clean, clean)
 
 class CalculadorEquidad:
     @staticmethod

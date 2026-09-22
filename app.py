@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 from datetime import date
 from supabase import create_client, Client
-from engine import generar_malla_semanal, normalizar_posicion
+from engine import generar_malla_semanal, limpiar_posicion
 
 st.set_page_config(page_title="Sistema WFM - Control de Tareo", page_icon="⚙️", layout="wide")
 
@@ -51,7 +51,7 @@ with tab1:
 
             filas.append({
                 "Colaborador": row['colaboradores']['nombre'],
-                "Posición": normalizar_posicion(row['colaboradores']['posicion']),
+                "Posición": limpiar_posicion(row['colaboradores']['posicion']),
                 "Fecha": row['fecha'],
                 "Turno": codigo_turno
             })
@@ -87,7 +87,7 @@ with tab2:
         sedes_opt = ["Sede 1", "Sede 2", "Sede 3"]
 
     res_colabs = supabase.table("colaboradores").select("posicion").eq("activo", True).execute().data
-    posiciones_opt = sorted(list(set(normalizar_posicion(c['posicion']) for c in res_colabs if c.get('posicion')))) if res_colabs else []
+    posiciones_opt = sorted(list(set(limpiar_posicion(c['posicion']) for c in res_colabs if c.get('posicion')))) if res_colabs else []
 
     if posiciones_opt:
         c1, c2, c3, c4 = st.columns(4)
@@ -124,7 +124,7 @@ with tab3:
     st.subheader("Registrar Bloqueo por Vacaciones, DM o Incidencia")
     
     res_colab = supabase.table("colaboradores").select("id, nombre, posicion").eq("activo", True).execute()
-    opciones_colab = {f"{c['nombre']} ({normalizar_posicion(c['posicion'])})": c['id'] for c in res_colab.data} if res_colab.data else {}
+    opciones_colab = {f"{c['nombre']} ({limpiar_posicion(c['posicion'])})": c['id'] for c in res_colab.data} if res_colab.data else {}
     
     if opciones_colab:
         colab_sel = st.selectbox("Seleccionar Colaborador:", list(opciones_colab.keys()))
@@ -185,7 +185,7 @@ with tab4:
                                 val_codigo = str(raw_codigo).strip()
 
                             val_nombre = str(raw_nombre).strip()
-                            val_posicion = normalizar_posicion(str(raw_posicion)) if not pd.isna(raw_posicion) else "General"
+                            val_posicion = limpiar_posicion(str(raw_posicion)) if not pd.isna(raw_posicion) else "General"
                             
                             nuevos_registros.append({
                                 "codigo": val_codigo,
@@ -212,7 +212,7 @@ with tab4:
                 
                 if btn_agregar_emp and nuevo_codigo and nuevo_nombre:
                     supabase.table("colaboradores").insert({
-                        "codigo": nuevo_codigo, "nombre": nuevo_nombre, "posicion": normalizar_posicion(nueva_posicion),
+                        "codigo": nuevo_codigo, "nombre": nuevo_nombre, "posicion": limpiar_posicion(nueva_posicion),
                         "he_acumuladas": 0.0, "dias_pendientes_recuperacion": 0, "activo": True
                     }).execute()
                     st.success(f"✅ {nuevo_nombre} registrado.")
