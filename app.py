@@ -35,7 +35,6 @@ with tab1:
 
     @st.cache_data(ttl=5)
     def cargar_matriz_tareo(f_inicio_str, f_fin_str, lista_dias):
-        # NOTA: Extraemos también el 'estado' de la base de datos
         res = supabase.table("tareo_programado")\
             .select("fecha, turno, sede, es_hhee, estado, colaboradores(nombre, posicion)")\
             .gte("fecha", f_inicio_str)\
@@ -48,9 +47,9 @@ with tab1:
         for row in res.data:
             nombre_sede = row.get('sede', 'Sede 1')
             turno_base = "D" if row['turno'] == "Día" else "N"
-            estado = row.get('estado', 'PROGRAMADO')
+            estado = row.get('estado')
             
-            # Lógica para pintar las faltas o los turnos normales
+            # Aseguramos que la falta se pinte en la matriz
             if estado in ['FALTA', 'DM', 'PERMISO']:
                 codigo_turno = f"❌ {estado}"
             else:
@@ -75,7 +74,14 @@ with tab1:
     f_fin_s = str(fecha_seleccionada + timedelta(days=6))
     matriz_df = cargar_matriz_tareo(f_ini_s, f_fin_s, dias_semana)
 
-    st.subheader("📊 Cuadrante Semanal")
+    col_title, col_btn_refresh = st.columns([4, 1])
+    with col_title:
+        st.subheader("📊 Cuadrante Semanal")
+    with col_btn_refresh:
+        if st.button("🔄 Actualizar Vista"):
+            st.cache_data.clear()
+            st.rerun()
+            
     if matriz_df.empty:
         st.info("Haz clic en **'🚀 Recalcular Malla Semanal'** para generar el cuadrante.")
     else:
@@ -99,7 +105,7 @@ with tab1:
             total_hhee = 0
             if res_prog:
                 for p in res_prog:
-                    if p.get('estado') in ['FALTA', 'DM', 'PERMISO']: continue # No contar a los que faltaron
+                    if p.get('estado') in ['FALTA', 'DM', 'PERMISO']: continue
                     
                     s = p['sede']
                     t = p['turno']
@@ -191,16 +197,13 @@ with tab3:
     st.subheader("🚨 Registrar Faltas, DM o Permisos (Día a Día)")
     st.markdown("Selecciona el día para ver quiénes están programados hoy y reportar si no asistieron.")
     
-    # 1. Filtro Diario
     c_fecha, c_resto = st.columns([1, 2])
     fecha_incidencia = c_fecha.date_input("Seleccionar Fecha del Incidente:", date.today())
     
-    # Extraer turnos programados del día seleccionado
     res_turnos = supabase.table("tareo_programado").select("colaborador_id, turno, sede, estado, colaboradores(nombre, posicion)").eq("fecha", str(fecha_incidencia)).execute().data
     turnos_activos = [t for t in res_turnos if t.get('estado') not in ['FALTA', 'DM', 'PERMISO']] if res_turnos else []
     
     if turnos_activos:
-        # Generar lista visual de asistentes programados
         opciones_hoy = {f"{t['colaboradores']['nombre']} - {t['turno']} ({t['sede']})": t['colaborador_id'] for t in turnos_activos}
         
         with st.form("form_incidencia_diaria", clear_on_submit=True):
@@ -210,18 +213,24 @@ with tab3:
             
             if st.form_submit_button("Registrar Ausencia e Iniciar Reemplazo"):
                 id_c = opciones_hoy[colab_sel]
-                success, msg = registrar_incidencia_diaria(fecha_incidencia, id_c, motivo, reemplazar)
-                if success:
-                    st.success(msg)
+                # Forzamos la actualización directa aquí para mayor seguridad
+                turnos_update = supabase.table("tareo_programado").select("id").eq("fecha", str(fecha_incidencia)).eq("colaborador_id", id_c).execute().data
+                if turnos_update:
+                    # Limpiamos caché antes y después
+                    st.cache_data.clear()
+                    success, msg = registrar_incidencia_diaria(fecha_incidencia, id_c, motivo, reemplazar)
+                    if success:
+                        st.success(msg)
+                    else:
+                        st.error(msg)
                 else:
-                    st.error(msg)
-                st.cache_data.clear()
+                    st.error("No se encontró el turno para actualizar.")
+                
     else:
         st.info("No hay turnos programados activos para esta fecha.")
 
     st.divider()
 
-    # 2. Vacaciones Futuras
     st.subheader("📅 Bloquear Fechas Futuras (Vacaciones)")
     res_colab = supabase.table("colaboradores").select("id, nombre, posicion").eq("activo", True).execute()
     opc_colab = {f"{c['nombre']} ({limpiar_posicion(c['posicion'])})": c['id'] for c in res_colab.data} if res_colab.data else {}
