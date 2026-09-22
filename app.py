@@ -4,20 +4,55 @@ import plotly.express as px
 from datetime import date, timedelta
 from supabase import create_client, Client
 from engine import generar_malla_semanal, limpiar_posicion, registrar_incidencia_diaria
+import os
 
+# 1. CONFIGURACIÓN DE PÁGINA (Siempre debe ir primero)
 st.set_page_config(page_title="Tareo de Operaciones - Fargoline", page_icon="📦", layout="wide")
 
+# =========================================================================
+# 2. SISTEMA DE SEGURIDAD (LOGIN)
+# =========================================================================
+if "autenticado" not in st.session_state:
+    st.session_state.autenticado = False
+
+if not st.session_state.autenticado:
+    # Diseño de la pantalla de Login centrada
+    col1, col2, col3 = st.columns([1, 1, 1])
+    with col2:
+        st.write("")
+        st.write("")
+        # Mostrar logo en el Login
+        if os.path.exists("logo.png.png"): st.image("logo.png.png", width=220)
+        elif os.path.exists("logo.png"): st.image("logo.png", width=220)
+        
+        st.title("🔒 Acceso al Sistema")
+        usuario = st.text_input("👤 Usuario")
+        clave = st.text_input("🔑 Contraseña", type="password")
+        
+        if st.button("Ingresar", type="primary", use_container_width=True):
+            # AQUI PUEDES CAMBIAR TU USUARIO Y CONTRASEÑA
+            if usuario == "admin" and clave == "fargoline2026":
+                st.session_state.autenticado = True
+                st.rerun()
+            else:
+                st.error("❌ Usuario o contraseña incorrectos")
+    
+    # Detenemos la ejecución para que no cargue la app si no está logueado
+    st.stop()
+
+# =========================================================================
+# 3. APLICACIÓN PRINCIPAL (Solo se ejecuta si autenticado == True)
+# =========================================================================
 SUPABASE_URL = "https://vsnyqynjaxdmofyewfcq.supabase.co"
 SUPABASE_KEY = "sb_publishable__wmHvw9dfAcu-o78te3iMg_9JqpAb_P"
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# --- CABECERA CON LOGO MÁS GRANDE Y ALINEADO ---
+# --- CABECERA CON LOGO Y TÍTULO ---
 col_logo, col_title = st.columns([2, 8])
 with col_logo:
-    try:
-        st.image("logo.png", width=220)
-    except Exception:
-        st.write("")
+    if os.path.exists("logo.png.png"): st.image("logo.png.png", width=220)
+    elif os.path.exists("logo.png"): st.image("logo.png", width=220)
+    else: st.write("")
 
 with col_title:
     st.title("Tareo de Operaciones - Fargoline")
@@ -25,6 +60,13 @@ with col_title:
 dias_nombres = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
 
 with st.sidebar:
+    # Botón para cerrar sesión
+    if st.button("🚪 Cerrar Sesión", use_container_width=True):
+        st.session_state.autenticado = False
+        st.rerun()
+    
+    st.divider()
+    
     st.header("⚡ Acciones Rápidas")
     fecha_seleccionada = st.date_input("Inicio de malla (Lunes recomendado):", date.today())
     num_semanas = st.selectbox("Semanas a programar / visualizar:", [1, 2, 3, 4], index=0)
@@ -359,7 +401,7 @@ with tab4:
             except: pass
 
 # =========================================================================
-# TAB 5: HISTÓRICO Y REPORTES
+# TAB 5: HISTÓRICO Y REPORTES (Con Botones de Borrado)
 # =========================================================================
 with tab5:
     st.subheader("🗂️ Consulta de Histórico General")
