@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from datetime import date
+from datetime import date, timedelta
 from supabase import create_client, Client
 from engine import generar_malla_semanal, limpiar_posicion
 
@@ -25,17 +25,24 @@ with st.sidebar:
 
 # --- PESTAÑAS PRINCIPALES ---
 tab1, tab2, tab3, tab4 = st.tabs([
-    "📅 Matriz de Tareo", 
+    "📅 Matriz y Reporte Ejecutivo", 
     "🏢 Requerimiento por Sede",
     "🚨 Registrar Incidencia / Vacaciones", 
     "👥 Gestión de Personal y Sedes"
 ])
 
-# --- TAB 1: MATRIZ DE TAREO ---
+# --- TAB 1: MATRIZ DE TAREO Y REPORTE DE DÉFICIT PARA JEFATURA ---
 with tab1:
+    dias_semana = [str(fecha_seleccionada + timedelta(days=i)) for i in range(7)]
+
     @st.cache_data(ttl=5)
-    def cargar_matriz_tareo():
-        res = supabase.table("tareo_programado").select("fecha, turno, sede, colaboradores(nombre, posicion)").execute()
+    def cargar_matriz_tareo(f_inicio_str, f_fin_str, lista_dias):
+        res = supabase.table("tareo_programado")\
+            .select("fecha, turno, sede, colaboradores(nombre, posicion)")\
+            .gte("fecha", f_inicio_str)\
+            .lte("fecha", f_fin_str)\
+            .execute()
+        
         if not res.data:
             return pd.DataFrame()
 
@@ -52,7 +59,7 @@ with tab1:
             filas.append({
                 "Colaborador": row['colaboradores']['nombre'],
                 "Posición": limpiar_posicion(row['colaboradores']['posicion']),
-                "Fecha": row['fecha'],
+                "Fecha": str(row['fecha']),
                 "Turno": codigo_turno
             })
         
@@ -63,17 +70,95 @@ with tab1:
             values="Turno", 
             aggfunc="first"
         ).fillna("L")
+        
+        # Forzar a que la matriz contenga siempre los 7 días
+        matriz = matriz.reindex(columns=lista_dias, fill_value="L")
         return matriz
 
-    matriz_df = cargar_matriz_tareo()
+    f_ini_s = str(fecha_seleccionada)
+    f_fin_s = str(fecha_seleccionada + timedelta(days=6))
+    matriz_df = cargar_matriz_tareo(f_ini_s, f_fin_s, dias_semana)
+
+    st.subheader("📊 Cuadrante Semanal (7 Días Completos)")
     if matriz_df.empty:
         st.info("Haz clic en **'🚀 Recalcular Malla Semanal'** para generar el cuadrante.")
     else:
-        st.subheader("Cuadrante Semanal (Turno y Sede Asignada)")
         st.dataframe(matriz_df, use_container_width=True)
-        
         csv = matriz_df.to_csv().encode('utf-8')
-        st.download_button("📥 Descargar Reporte CSV", csv, f"tareo_{date.today()}.csv", "text/csv")
+        st.download_button("📥 Descargar Reporte CSV", csv, f"tareo_{fecha_seleccionada}.csv", "text/csv")
+
+    st.divider()
+
+    # --- DASHBOARD EJECUTIVO DE FALTANTES Y DÉFICIT ---
+    st.subheader("👔 Reporte Ejecutivo para Jefatura: Cobertura y Faltantes por Sede")
+    st.markdown("Comparativa automática entre el **Personal Requerido vs. Programado Real**.")
+
+    try:
+        res_dem = supabase.table("demanda_operativa").select("*").execute().data
+        res_prog = supabase.table("tareo_programado")\
+            .select("sede, turno, colaboradores(posicion)")\
+            .gte("fecha", f_ini_s)\
+            .lte("fecha", f_fin_s)\
+            .execute().data
+
+        if res_dem:
+            df_dem = pd.DataFrame(res_dem)
+            conteo_prog = {}
+            if res_prog:
+                for p in res_prog:
+                    s = p['sede']
+                    t = p['turno']
+                    pos = limpiar_posicion(p['colaboradores']['posicion'])
+                    key = (s, pos, t)
+                    conteo_prog[key] = conteo_prog.get(key, 0) + 1
+
+            reporte_filas = []
+            total_req_sem = 0
+            total_prog_sem = 0
+
+            for _, r in df_dem.iterrows():
+                s = r['sede']
+                pos = limpiar_posicion(r['posicion'])
+                t = r['turno']
+                req_diario = r['cantidad']
+                req_semanal = req_diario * 7
+                
+                prog_semanal = conteo_prog.get((s, pos, t), 0)
+                deficit_semanal = req_semanal - prog_semanal
+
+                total_req_sem += req_semanal
+                total_prog_sem += prog_semanal
+
+                if deficit_semanal > 0:
+                    estado = f"⚠️ Faltan {deficit_semanal} turnos en la semana"
+                elif deficit_semanal == 0:
+                    estado = "✅ Cobertura 100%"
+                else:
+                    estado = "🔵 Sobre-cubierto"
+
+                reporte_filas.append({
+                    "Sede": s,
+                    "Cargo / Posición": pos,
+                    "Turno": t,
+                    "Requerido (Diario)": req_diario,
+                    "Requerido (Semana)": req_semanal,
+                    "Programado (Semana)": prog_semanal,
+                    "Déficit / Faltante": deficit_semanal if deficit_semanal > 0 else 0,
+                    "Estado Cobertura": estado
+                })
+
+            kpi1, kpi2, kpi3 = st.columns(3)
+            kpi1.metric("Turnos Requeridos (Semana)", total_req_sem)
+            kpi2.metric("Turnos Coberturados (Real)", total_prog_sem)
+            deficit_total = total_req_sem - total_prog_sem
+            kpi3.metric("Déficit Total Headcount", f"{deficit_total} turnos", delta=-deficit_total if deficit_total > 0 else 0, delta_color="inverse")
+
+            df_reporte = pd.DataFrame(reporte_filas)
+            st.dataframe(df_reporte, use_container_width=True)
+        else:
+            st.info("Configura los requerimientos en la pestaña **'🏢 Requerimiento por Sede'** para visualizar el resumen de faltantes.")
+    except Exception as e:
+        st.error(f"Error al calcular reporte ejecutivo: {e}")
 
 # --- TAB 2: CONFIGURACIÓN DE REQUERIMIENTOS POR SEDE ---
 with tab2:
