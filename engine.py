@@ -29,15 +29,13 @@ class CalculadorEquidad:
         if es_dia_descanso_preferido: score += 100.0
         return score
 
-# Acepta la cantidad de semanas a programar (por defecto 1)
 def generar_malla_semanal(fecha_inicio: date, num_semanas: int = 1):
     print(f"\n==================================================")
-    print(f" GENERANDO TAREO PARA {num_semanas} SEMANA(S) - CONSERVA HISTÓRICO")
+    print(f" GENERANDO TAREO CON CONSISTENCIA DE TURNO (NO MEZCLAS)")
     print(f"==================================================\n")
 
     fecha_fin_total = fecha_inicio + timedelta(days=(7 * num_semanas) - 1)
     
-    # Borra únicamente el rango de fechas seleccionado (conserva el histórico anterior)
     supabase.table("tareo_programado").delete().gte("fecha", str(fecha_inicio)).lte("fecha", str(fecha_fin_total)).execute()
 
     colaboradores = supabase.table("colaboradores").select("*").eq("activo", True).execute().data
@@ -105,6 +103,15 @@ def generar_malla_semanal(fecha_inicio: date, num_semanas: int = 1):
                     turnos_esta_semana = historial_semana_actual[emp['id']]
                     
                     if any(t['fecha'] == str(d) for t in turnos_globales): continue
+                    
+                    # =========================================================================
+                    # NUEVA REGLA ESTRICTA: CONSISTENCIA DE TURNO
+                    # Si ya trabajó en la semana, SOLO puede seguir en ese mismo turno (D o N)
+                    # =========================================================================
+                    if turnos_esta_semana:
+                        turno_base_semana = turnos_esta_semana[0]['turno']
+                        if slot['turno'] != turno_base_semana:
+                            continue # Lo descarta automáticamente para este slot
                     
                     if turnos_globales:
                         ultimo_turno = turnos_globales[-1]
