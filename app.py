@@ -106,7 +106,7 @@ with tab3:
     with col_izq:
         st.subheader("👨‍💼 Gestión de Colaboradores")
         
-        # --- CARGA MASIVA (BLINDADA CONTRA ERRORES DE ENCABEZADO) ---
+        # --- CARGA MASIVA (LIMPIEZA DE FORMATO NÚMERICO) ---
         with st.expander("📁 Carga Masiva desde Excel / CSV", expanded=True):
             st.markdown("Subir el archivo Excel (.xlsx o .csv) con la lista de colaboradores.")
             archivo_excel = st.file_uploader("Selecciona tu archivo Excel (.xlsx o .csv):", type=["xlsx", "csv"])
@@ -118,7 +118,6 @@ with tab3:
                     else:
                         df_cargado = pd.read_excel(archivo_excel)
                     
-                    # Limpiar espacios en blanco al inicio/final de las columnas
                     df_cargado.columns = [str(c).strip() for c in df_cargado.columns]
                     
                     st.write("Vista previa de los datos a importar:")
@@ -127,21 +126,30 @@ with tab3:
                     if st.button("📥 Importar Lista Completa a la Base de Datos"):
                         nuevos_registros = []
                         for _, row in df_cargado.iterrows():
-                            # Lectura directa por posición de columna: Columna 0 = Código, 1 = Nombre, 2 = Posición
-                            val_codigo = str(row.iloc[0]).strip()
-                            val_nombre = str(row.iloc[1]).strip()
-                            val_posicion = str(row.iloc[2]).strip()
+                            raw_codigo = row.iloc[0]
+                            raw_nombre = row.iloc[1]
+                            raw_posicion = row.iloc[2]
+
+                            if pd.isna(raw_codigo) or pd.isna(raw_nombre):
+                                continue
+
+                            # Formatear el código eliminando el .0 de los decimales de Excel
+                            try:
+                                val_codigo = str(int(float(raw_codigo))).strip()
+                            except ValueError:
+                                val_codigo = str(raw_codigo).strip()
+
+                            val_nombre = str(raw_nombre).strip()
+                            val_posicion = str(raw_posicion).strip() if not pd.isna(raw_posicion) else "General"
                             
-                            # Ignorar filas totalmente vacías
-                            if val_codigo and val_nombre and val_codigo.lower() != 'nan':
-                                nuevos_registros.append({
-                                    "codigo": val_codigo,
-                                    "nombre": val_nombre,
-                                    "posicion": val_posicion,
-                                    "he_acumuladas": 0.0,
-                                    "dias_pendientes_recuperacion": 0,
-                                    "activo": True
-                                })
+                            nuevos_registros.append({
+                                "codigo": val_codigo,
+                                "nombre": val_nombre,
+                                "posicion": val_posicion,
+                                "he_acumuladas": 0.0,
+                                "dias_pendientes_recuperacion": 0,
+                                "activo": True
+                            })
                         
                         if nuevos_registros:
                             supabase.table("colaboradores").insert(nuevos_registros).execute()
