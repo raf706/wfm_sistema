@@ -9,13 +9,14 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 # Regla temporal de equivalencia
 EQUIVALENCIAS_POSICION = {
     "Controlador de Patio": "Controlador de Exportaciones",
-    "Controlador De Patio": "Controlador de Exportaciones",
 }
 
 def normalizar_posicion(pos: str) -> str:
     if not pos:
         return ""
-    pos_clean = pos.strip()
+    # Estandariza "De" -> "de", "Y" -> "y" y elimina espacios extra
+    pos_clean = pos.strip().title()
+    pos_clean = pos_clean.replace(" De ", " de ").replace(" Y ", " y ")
     return EQUIVALENCIAS_POSICION.get(pos_clean, pos_clean)
 
 class CalculadorEquidad:
@@ -32,10 +33,8 @@ def generar_malla_semanal(fecha_inicio: date):
     print(f" GENERANDO TAREO CON DEMANDA CONFIGURABLE POR SEDE")
     print(f"==================================================\n")
 
-    # 1. Limpiar malla anterior
     supabase.table("tareo_programado").delete().neq("id", 0).execute()
 
-    # 2. Traer colaboradores y restricciones
     colaboradores = supabase.table("colaboradores").select("*").eq("activo", True).execute().data
     restricciones = supabase.table("restricciones_fechas").select("*").execute().data
 
@@ -43,7 +42,6 @@ def generar_malla_semanal(fecha_inicio: date):
         print("No hay colaboradores activos.")
         return
 
-    # 3. Leer la demanda de personal configurada por el usuario
     try:
         res_demanda = supabase.table("demanda_operativa").select("*").execute().data
     except Exception:
@@ -60,7 +58,6 @@ def generar_malla_semanal(fecha_inicio: date):
                     "turno": item['turno']
                 })
     else:
-        # Fallback de seguridad si aún no se ha configurado la demanda
         posiciones_existentes = list(set(normalizar_posicion(c['posicion']) for c in colaboradores if c.get('posicion')))
         for pos in posiciones_existentes:
             demanda_diaria.append({"sede": "Sede 1", "posicion": pos, "turno": "Día"})
@@ -75,10 +72,8 @@ def generar_malla_semanal(fecha_inicio: date):
             candidatos_validos = []
             
             for emp in colaboradores:
-                # A. Filtro de Posición exacta (o equivalente)
                 if normalizar_posicion(emp['posicion']) != slot['posicion']: continue
                 
-                # B. Filtro de Vacaciones o DM
                 esta_de_vacaciones = False
                 for r in restricciones:
                     if r['colaborador_id'] == emp['id']:
@@ -91,20 +86,15 @@ def generar_malla_semanal(fecha_inicio: date):
 
                 turnos_del_colaborador = historial_semana[emp['id']]
                 
-                # C. Regla: 1 turno al día máximo
                 if any(t['fecha'] == str(d) for t in turnos_del_colaborador): continue
-                    
-                # D. Regla 4x3: Máximo 4 turnos a la semana
                 if len(turnos_del_colaborador) >= 4: continue
                 
-                # E. Filtro Biológico: Noche -> Día prohibido
                 if turnos_del_colaborador:
                     ultimo_turno = turnos_del_colaborador[-1]
                     ayer = str(d - timedelta(days=1))
                     if ultimo_turno['fecha'] == ayer and ultimo_turno['turno'] == "Noche" and slot['turno'] == "Día":
                         continue 
 
-                # Calcular Score
                 score = CalculadorEquidad.calcular_score(
                     emp.get('he_acumuladas', 0.0),
                     emp.get('dias_pendientes_recuperacion', 0),
@@ -113,7 +103,6 @@ def generar_malla_semanal(fecha_inicio: date):
                 )
                 candidatos_validos.append((score, emp))
 
-            # Asignar ganador
             if candidatos_validos:
                 candidatos_validos.sort(key=lambda x: x[0])
                 ganador = candidatos_validos[0][1]

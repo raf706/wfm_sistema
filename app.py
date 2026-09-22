@@ -4,10 +4,8 @@ from datetime import date
 from supabase import create_client, Client
 from engine import generar_malla_semanal, normalizar_posicion
 
-# 1. Configuración de la plataforma web
 st.set_page_config(page_title="Sistema WFM - Control de Tareo", page_icon="⚙️", layout="wide")
 
-# 2. Conexión a Supabase
 SUPABASE_URL = "https://vsnyqynjaxdmofyewfcq.supabase.co"
 SUPABASE_KEY = "sb_publishable__wmHvw9dfAcu-o78te3iMg_9JqpAb_P"
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -43,7 +41,6 @@ with tab1:
 
         filas = []
         for row in res.data:
-            # Mostramos el turno junto con la sede asignada
             nombre_sede = row.get('sede', 'Sede 1')
             if row['turno'] == "Día":
                 codigo_turno = f"D ({nombre_sede})"
@@ -54,7 +51,7 @@ with tab1:
 
             filas.append({
                 "Colaborador": row['colaboradores']['nombre'],
-                "Posición": row['colaboradores']['posicion'],
+                "Posición": normalizar_posicion(row['colaboradores']['posicion']),
                 "Fecha": row['fecha'],
                 "Turno": codigo_turno
             })
@@ -83,7 +80,6 @@ with tab2:
     st.subheader("🏢 Definir Cuántos Trabajadores Requiere Cada Sede")
     st.markdown("Establece la cantidad de personal necesaria por cargo, sede y turno (Día / Noche).")
 
-    # Obtener sedes y posiciones únicas
     try:
         res_sedes = supabase.table("sedes").select("nombre").eq("activa", True).execute().data
         sedes_opt = [s['nombre'] for s in res_sedes] if res_sedes else ["Sede 1", "Sede 2", "Sede 3"]
@@ -101,7 +97,6 @@ with tab2:
         cant_sel = c4.number_input("Personal Requerido:", min_value=0, max_value=20, value=1)
 
         if st.button("💾 Guardar Requerimiento"):
-            # Insertar o actualizar requerimiento
             supabase.table("demanda_operativa").upsert(
                 {"sede": sede_sel, "posicion": pos_sel, "turno": turno_sel, "cantidad": cant_sel},
                 on_conflict="sede,posicion,turno"
@@ -120,16 +115,16 @@ with tab2:
             else:
                 st.info("Aún no has configurado requerimientos específicos.")
         except Exception:
-            st.info("Crea la tabla 'demanda_operativa' en Supabase para visualizar el resumen.")
+            st.info("Crea la tabla 'demanda_operativa' en Supabase.")
     else:
-        st.warning("Primero debes importar o registrar colaboradores para definir la demanda por cargo.")
+        st.warning("Primero debes importar o registrar colaboradores.")
 
 # --- TAB 3: REGISTRO DE INCIDENCIAS ---
 with tab3:
     st.subheader("Registrar Bloqueo por Vacaciones, DM o Incidencia")
     
     res_colab = supabase.table("colaboradores").select("id, nombre, posicion").eq("activo", True).execute()
-    opciones_colab = {f"{c['nombre']} (Posición {c['posicion']})": c['id'] for c in res_colab.data} if res_colab.data else {}
+    opciones_colab = {f"{c['nombre']} ({normalizar_posicion(c['posicion'])})": c['id'] for c in res_colab.data} if res_colab.data else {}
     
     if opciones_colab:
         colab_sel = st.selectbox("Seleccionar Colaborador:", list(opciones_colab.keys()))
@@ -190,7 +185,7 @@ with tab4:
                                 val_codigo = str(raw_codigo).strip()
 
                             val_nombre = str(raw_nombre).strip()
-                            val_posicion = str(raw_posicion).strip() if not pd.isna(raw_posicion) else "General"
+                            val_posicion = normalizar_posicion(str(raw_posicion)) if not pd.isna(raw_posicion) else "General"
                             
                             nuevos_registros.append({
                                 "codigo": val_codigo,
@@ -217,7 +212,7 @@ with tab4:
                 
                 if btn_agregar_emp and nuevo_codigo and nuevo_nombre:
                     supabase.table("colaboradores").insert({
-                        "codigo": nuevo_codigo, "nombre": nuevo_nombre, "posicion": nueva_posicion,
+                        "codigo": nuevo_codigo, "nombre": nuevo_nombre, "posicion": normalizar_posicion(nueva_posicion),
                         "he_acumuladas": 0.0, "dias_pendientes_recuperacion": 0, "activo": True
                     }).execute()
                     st.success(f"✅ {nuevo_nombre} registrado.")
