@@ -105,7 +105,16 @@ with tab2:
             st.cache_data.clear()
 
         st.divider()
-        st.subheader("📋 Cobertura Actual Configurada")
+        col_tit, col_btn = st.columns([3, 1])
+        with col_tit:
+            st.subheader("📋 Cobertura Actual Configurada")
+        with col_btn:
+            if st.button("🗑️ Vaciar Toda la Demanda"):
+                supabase.table("demanda_operativa").delete().neq("id", 0).execute()
+                st.warning("⚠️ Se han eliminado todos los requerimientos.")
+                st.cache_data.clear()
+                st.rerun()
+
         try:
             res_demanda = supabase.table("demanda_operativa").select("*").execute().data
             if res_demanda:
