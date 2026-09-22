@@ -106,11 +106,44 @@ with tab3:
     with col_izq:
         st.subheader("👨‍💼 Gestión de Colaboradores")
         
-        with st.expander("➕ Agregar Nuevo Colaborador", expanded=True):
+        # --- NUEVA OPCIÓN: CARGA MASIVA DESDE EXCEL ---
+        with st.expander("📁 Carga Masiva desde Excel / CSV", expanded=True):
+            st.markdown("Subir el archivo Excel con las columnas: **N° pers.**, **Nombre**, **Descripción Posición**")
+            archivo_excel = st.file_uploader("Selecciona tu archivo Excel (.xlsx o .csv):", type=["xlsx", "csv"])
+            
+            if archivo_excel is not None:
+                try:
+                    if archivo_excel.name.endswith('.csv'):
+                        df_cargado = pd.read_csv(archivo_excel)
+                    else:
+                        df_cargado = pd.read_excel(archivo_excel)
+                    
+                    st.write("Vista previa de los datos a importar:")
+                    st.dataframe(df_cargado.head(5))
+                    
+                    if st.button("📥 Importar Lista Completa a la Base de Datos"):
+                        nuevos_registros = []
+                        for _, row in df_cargado.iterrows():
+                            nuevos_registros.append({
+                                "codigo": str(row["N° pers."]),
+                                "nombre": str(row["Nombre"]),
+                                "posicion": str(row["Descripción Posición"]),
+                                "he_acumuladas": 0.0,
+                                "dias_pendientes_recuperacion": 0,
+                                "activo": True
+                            })
+                        
+                        supabase.table("colaboradores").insert(nuevos_registros).execute()
+                        st.success(f"✅ ¡Se registraron {len(nuevos_registros)} colaboradores exitosamente!")
+                        st.cache_data.clear()
+                except Exception as e:
+                    st.error(f"Error al procesar el archivo. Asegúrate de que tenga las columnas exactas: 'N° pers.', 'Nombre', 'Descripción Posición'. Detalle: {e}")
+
+        with st.expander("➕ Agregar Manualmente (Uno por Uno)"):
             with st.form("form_nuevo_colab", clear_on_submit=True):
-                nuevo_codigo = st.text_input("Código (ej. EMP010):")
+                nuevo_codigo = st.text_input("Código (ej. 10120):")
                 nuevo_nombre = st.text_input("Nombre Completo:")
-                nueva_posicion = st.selectbox("Posición / Perfil:", ["A", "B", "C"])
+                nueva_posicion = st.text_input("Descripción Posición:")
                 
                 btn_agregar_emp = st.form_submit_button("Guardar Colaborador")
                 
@@ -127,23 +160,18 @@ with tab3:
                         supabase.table("colaboradores").insert(nuevo_emp).execute()
                         st.success(f"✅ {nuevo_nombre} registrado correctamente.")
                         st.cache_data.clear()
-                    else:
-                        st.error("Por favor completa el código y el nombre.")
 
-        with st.expander("🗑️ Desactivar / Eliminar Colaborador"):
+        with st.expander("🗑️ Dar de Baja Colaborador"):
             res_activos = supabase.table("colaboradores").select("id, nombre, codigo").eq("activo", True).execute()
             list_activos = {f"[{c['codigo']}] {c['nombre']}": c['id'] for c in res_activos.data} if res_activos.data else {}
             
             if list_activos:
-                emp_a_eliminar = st.selectbox("Seleccionar Colaborador a dar de baja:", list(list_activos.keys()))
-                if st.button("🚫 Dar de Baja Colaborador"):
+                emp_a_eliminar = st.selectbox("Seleccionar Colaborador:", list(list_activos.keys()))
+                if st.button("🚫 Dar de Baja"):
                     id_emp = list_activos[emp_a_eliminar]
-                    # Soft delete (Desactivar) para no romper el historial del tareo
                     supabase.table("colaboradores").update({"activo": False}).eq("id", id_emp).execute()
                     st.warning(f"{emp_a_eliminar} ha sido dado de baja.")
                     st.cache_data.clear()
-            else:
-                st.info("No hay colaboradores activos.")
 
     # --- SECCIÓN SEDES ---
     with col_der:
@@ -151,7 +179,7 @@ with tab3:
         
         with st.expander("➕ Agregar Nueva Sede", expanded=True):
             with st.form("form_nueva_sede", clear_on_submit=True):
-                nombre_sede = st.text_input("Nombre de la Sede (ej. Sede 4):")
+                nombre_sede = st.text_input("Nombre de la Sede:")
                 btn_agregar_sede = st.form_submit_button("Guardar Sede")
                 
                 if btn_agregar_sede:
@@ -159,8 +187,6 @@ with tab3:
                         supabase.table("sedes").insert({"nombre": nombre_sede, "activa": True}).execute()
                         st.success(f"✅ {nombre_sede} creada exitosamente.")
                         st.cache_data.clear()
-                    else:
-                        st.error("Ingresa el nombre de la sede.")
 
         with st.expander("🗑️ Eliminar Sede"):
             try:
@@ -168,13 +194,11 @@ with tab3:
                 list_sedes = {s['nombre']: s['id'] for s in res_sedes.data} if res_sedes.data else {}
                 
                 if list_sedes:
-                    sede_a_eliminar = st.selectbox("Seleccionar Sede a Eliminar:", list(list_sedes.keys()))
-                    if st.button("🗑️ Eliminar Sede Seleccionada"):
+                    sede_a_eliminar = st.selectbox("Seleccionar Sede:", list(list_sedes.keys()))
+                    if st.button("🗑️ Eliminar Sede"):
                         id_sede = list_sedes[sede_a_eliminar]
                         supabase.table("sedes").update({"activa": False}).eq("id", id_sede).execute()
                         st.warning(f"{sede_a_eliminar} eliminada.")
                         st.cache_data.clear()
-                else:
-                    st.info("No hay sedes activas.")
             except Exception:
                 st.info("Crea la tabla 'sedes' en Supabase para habilitar este módulo.")
