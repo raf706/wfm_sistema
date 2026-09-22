@@ -17,7 +17,7 @@ with st.sidebar:
     fecha_seleccionada = st.date_input("Inicio de semana a programar:", date.today())
     
     if st.button("🚀 Recalcular Malla Semanal", type="primary"):
-        with st.spinner("Generando matriz con HHEE y descansos intercalados..."):
+        with st.spinner("Generando matriz con descansos escalonados y HHEE..."):
             generar_malla_semanal(fecha_seleccionada)
             st.success("¡Malla actualizada correctamente!")
             st.cache_data.clear()
@@ -29,7 +29,7 @@ tab1, tab2, tab3, tab4 = st.tabs([
     "👥 Gestión de Personal y Sedes"
 ])
 
-# --- TAB 1: MATRIZ DE TAREO ---
+# --- TAB 1: MATRIZ Y REPORTE EJECUTIVO ---
 with tab1:
     dias_semana = [str(fecha_seleccionada + timedelta(days=i)) for i in range(7)]
 
@@ -48,7 +48,6 @@ with tab1:
             nombre_sede = row.get('sede', 'Sede 1')
             turno_base = "D" if row['turno'] == "Día" else "N"
             
-            # Etiqueta visual para las Horas Extras
             if row.get('es_hhee'):
                 codigo_turno = f"{turno_base} ({nombre_sede}) [HE]"
             else:
@@ -70,7 +69,7 @@ with tab1:
     f_fin_s = str(fecha_seleccionada + timedelta(days=6))
     matriz_df = cargar_matriz_tareo(f_ini_s, f_fin_s, dias_semana)
 
-    st.subheader("📊 Cuadrante Semanal (Los turnos extra se marcan con [HE])")
+    st.subheader("📊 Cuadrante Semanal (Los turnos en descanso se marcan con [HE])")
     if matriz_df.empty:
         st.info("Haz clic en **'🚀 Recalcular Malla Semanal'** para generar el cuadrante.")
     else:

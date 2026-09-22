@@ -21,19 +21,24 @@ def normalizar_posicion(pos: str) -> str:
 
 class CalculadorEquidad:
     @staticmethod
-    def calcular_score(he_acumuladas: float, dias_deuda: int, es_noche: bool, turnos_semana: int, dias_consecutivos: int) -> float:
+    def calcular_score(he_acumuladas: float, dias_deuda: int, es_noche: bool, turnos_semana: int, dias_consecutivos: int, es_dia_descanso_preferido: bool) -> float:
         score = (he_acumuladas or 0.0) * 10.0
         if es_noche: score += 15.0
         if dias_deuda and dias_deuda > 0: score -= 50.0
         score += turnos_semana * 20.0 
         
-        # NUEVO: Penalizar trabajar muchos días seguidos para forzar DESCANSOS INTERCALADOS
-        score += dias_consecutivos * 30.0 
+        # Penalizar días consecutivos para evitar bloques rígidos
+        score += dias_consecutivos * 25.0 
+        
+        # Penalizar trabajar en el bloque de descanso asignado al colaborador
+        if es_dia_descanso_preferido:
+            score += 100.0
+            
         return score
 
 def generar_malla_semanal(fecha_inicio: date):
     print(f"\n==================================================")
-    print(f" GENERANDO TAREO 4x3 CON HHEE Y DESCANSOS INTERCALADOS")
+    print(f" GENERANDO TAREO CON DESCANSOS ESCALONADOS Y HHEE")
     print(f"==================================================\n")
 
     supabase.table("tareo_programado").delete().neq("id", 0).execute()
@@ -60,11 +65,23 @@ def generar_malla_semanal(fecha_inicio: date):
             demanda_diaria.append({"sede": "Sede 1", "posicion": pos, "turno": "Día"})
             demanda_diaria.append({"sede": "Sede 1", "posicion": pos, "turno": "Noche"})
 
+    # Mapear índice a cada trabajador por cargo para escalonar descansos
+    colabs_por_pos = {}
+    for c in colaboradores:
+        pos = normalizar_posicion(c['posicion'])
+        colabs_por_pos.setdefault(pos, []).append(c)
+
+    offset_colaborador = {}
+    for pos, lista_c in colabs_por_pos.items():
+        lista_c.sort(key=lambda x: x['id'])
+        for idx, c in enumerate(lista_c):
+            offset_colaborador[c['id']] = idx
+
     historial_semana = {c['id']: [] for c in colaboradores}
     dias = [fecha_inicio + timedelta(days=i) for i in range(7)]
     registros_a_insertar = []
 
-    for d in dias:
+    for idx_dia, d in enumerate(dias):
         for slot in demanda_diaria:
             candidatos_normales = []
             candidatos_hhee = []
@@ -82,35 +99,41 @@ def generar_malla_semanal(fecha_inicio: date):
 
                 turnos_del_colaborador = historial_semana[emp['id']]
                 
-                # Regla: Maximo 1 turno por día
+                # Regla: Máximo 1 turno por día
                 if any(t['fecha'] == str(d) for t in turnos_del_colaborador): continue
                 
-                # Filtro Biológico (Noche a Día prohibido)
+                # Filtro Biológico: Noche a Día prohibido
                 if turnos_del_colaborador:
                     ultimo_turno = turnos_del_colaborador[-1]
                     ayer = str(d - timedelta(days=1))
                     if ultimo_turno['fecha'] == ayer and ultimo_turno['turno'] == "Noche" and slot['turno'] == "Día":
                         continue 
 
-                # NUEVO: Contar días consecutivos trabajados hacia atrás
+                # Contar días consecutivos trabajados hacia atrás
                 consecutivos = 0
                 temp_d = d - timedelta(days=1)
                 while any(t['fecha'] == str(temp_d) for t in turnos_del_colaborador):
                     consecutivos += 1
                     temp_d -= timedelta(days=1)
 
+                # Calcular si hoy cae en su ventana de descanso preferida
+                idx_emp = offset_colaborador.get(emp['id'], 0)
+                rest_start = (idx_emp * 2) % 7
+                dias_descanso_pref = [(rest_start + r) % 7 for r in range(3)]
+                es_descanso_pref = (idx_dia in dias_descanso_pref)
+
                 score = CalculadorEquidad.calcular_score(
                     emp.get('he_acumuladas', 0.0), emp.get('dias_pendientes_recuperacion', 0),
-                    (slot['turno'] == "Noche"), len(turnos_del_colaborador), consecutivos
+                    (slot['turno'] == "Noche"), len(turnos_del_colaborador), consecutivos, es_descanso_pref
                 )
                 
-                # NUEVA LÓGICA DE DOS RONDAS (Normal vs Extras)
+                # Clasificación por rondas (Normal vs Horas Extras)
                 if len(turnos_del_colaborador) < 4:
                     candidatos_normales.append((score, emp))
-                elif len(turnos_del_colaborador) < 6: # Máximo 6 días trabajados por semana (1 descanso obligatorio)
+                elif len(turnos_del_colaborador) < 6:
                     candidatos_hhee.append((score, emp))
 
-            # Asignación del Ganador
+            # Selección del candidato ganador
             if candidatos_normales:
                 candidatos_normales.sort(key=lambda x: x[0])
                 ganador = candidatos_normales[0][1]
@@ -120,7 +143,7 @@ def generar_malla_semanal(fecha_inicio: date):
                 ganador = candidatos_hhee[0][1]
                 es_hhee = True
             else:
-                continue # No hay personal ni siquiera para horas extras
+                continue
 
             historial_semana[ganador['id']].append({"fecha": str(d), "turno": slot['turno']})
             registros_a_insertar.append({
