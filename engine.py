@@ -6,10 +6,10 @@ SUPABASE_KEY = "sb_publishable__wmHvw9dfAcu-o78te3iMg_9JqpAb_P"
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# Equivalencia temporal del motor
-EQUIVALENCIAS_POSICION = {
-    "Controlador de Patio": "Controlador de Exportaciones",
-}
+# ==========================================================
+# REGLA DE EQUIVALENCIA VACÍA: Cada cargo es independiente
+# ==========================================================
+EQUIVALENCIAS_POSICION = {}
 
 def limpiar_posicion(pos: str) -> str:
     """Limpia formato (mayúsculas, 'de', 'y') sin aplicar equivalencias."""
@@ -20,7 +20,7 @@ def limpiar_posicion(pos: str) -> str:
     return pos_clean
 
 def normalizar_posicion(pos: str) -> str:
-    """Aplica formato limpio Y la regla de equivalencia para el cálculo del motor."""
+    """Aplica formato limpio. Al estar vacío el diccionario de equivalencias, devuelve el cargo original."""
     clean = limpiar_posicion(pos)
     return EQUIVALENCIAS_POSICION.get(clean, clean)
 
